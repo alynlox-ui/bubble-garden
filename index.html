@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>泡泡花园 · Bubble Garden v0.4</title>
+<title>泡泡花园 · Bubble Garden v0.5</title>
 <style>
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);}
   #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
@@ -20,7 +20,7 @@
 <script>
 "use strict";
 /* ============================================================
-   泡泡花园 Bubble Garden v0.4
+   泡泡花园 Bubble Garden v0.5
    泡泡射击 + 5 章节 · 50 官方关卡 + 创意工坊（自制关卡）
    上瘾系统：连胜加成 / 最佳纪录 / 章节通关奖励 / 总星数进度
    v0.4：新手教程关 / 新泡泡介绍弹窗 / 工坊合规校验 / 难度下调
@@ -76,6 +76,92 @@ const CHAPTERS = [
   { name:'冬之霜', icon:'❄️', desc:'六色挑战 · 步步为营' },
   { name:'星之冠', icon:'👑', desc:'大师之路 · 极限限步' },
 ];
+/* ---------- 主题屋：5 套背景主题，用星星解锁 ---------- */
+const THEMES = [
+  { id:'meadow',  name:'春日草地', icon:'🌱', need:0,   sky:['#cdeaf7','#e6f7ef','#fff6ec'], grass:'rgba(150,205,125,.65)', hill:'rgba(150,210,185,.28)', deco:'flowers' },
+  { id:'sunset',  name:'落日晚霞', icon:'🌇', need:30,  sky:['#ffd9c2','#ffe8d0','#fff2e0'], grass:'rgba(235,180,130,.55)', hill:'rgba(220,150,120,.28)', deco:'flowers' },
+  { id:'ocean',   name:'蔚蓝海滩', icon:'🌊', need:60,  sky:['#c8ecf7','#dcf5f9','#f0fbfc'], grass:'rgba(140,210,225,.6)', hill:'rgba(120,190,215,.28)', deco:'waves' },
+  { id:'sakura',  name:'樱花雨',   icon:'🌸', need:90,  sky:['#fde8ef','#fff0f4','#fff8f2'], grass:'rgba(230,170,190,.5)', hill:'rgba(235,175,195,.3)', deco:'petals' },
+  { id:'starlit', name:'星夜银河', icon:'🌙', need:120, sky:['#3b4a7a','#5a6ca8','#8a94c8'], grass:'rgba(70,85,140,.55)', hill:'rgba(90,105,165,.4)', deco:'stars' },
+];
+/* ---------- 成就馆：10 个成就，按条件自动解锁 ---------- */
+const ACHIEVEMENTS = [
+  { id:'first_win',  icon:'🌱', name:'初绽', desc:'通关第一个关卡',      check:s=>totalStars()>=1 },
+  { id:'stars30',    icon:'⭐', name:'星光收藏家', desc:'累计收集 30 颗星', check:s=>totalStars()>=30 },
+  { id:'combo5',     icon:'🔥', name:'连击高手', desc:'单局达成 ×5 连击',  check:()=>state.maxComboEver>=5 },
+  { id:'popped500',  icon:'🎈', name:'泡泡猎手', desc:'累计消除 500 个泡泡', check:()=>state.totalPoppedEver>=500 },
+  { id:'popped2000', icon:'🎪', name:'爆破艺术家', desc:'累计消除 2000 个泡泡', check:()=>state.totalPoppedEver>=2000 },
+  { id:'streak5',    icon:'💪', name:'常胜将军', desc:'达成 5 连胜',       check:()=>state.bestStreak>=5 },
+  { id:'streak10',   icon:'👑', name:'不败神话', desc:'达成 10 连胜',      check:()=>state.bestStreak>=10 },
+  { id:'ch1',        icon:'🌸', name:'花园入门', desc:'通过第一章全部关卡', check:()=>state.chapterClear>=0 },
+  { id:'all50',      icon:'🏆', name:'花园传说', desc:'通关全部 50 关',    check:()=>{ for(let i=1;i<=LEVELS.length;i++) if(!(state.starMap[i]>0)) return false; return true; } },
+  { id:'daily',      icon:'📅', name:'每日园丁', desc:'完成一次每日挑战',   check:()=>Object.keys(state.dailyDates).length>=1 },
+];
+function unlockAch(id){
+  if(state.ach[id]) return false;
+  const a=ACHIEVEMENTS.find(x=>x.id===id);
+  if(!a) return false;
+  state.ach[id]=true;
+  pushPopup(a.icon, '成就解锁 · '+a.name, [a.desc, '继续收集更多成就吧！']);
+  tone(880,.1,'triangle',.08); tone(1175,.14,'triangle',.07,.08);
+  save();
+  return true;
+}
+/* 统一成就巡检：关键事件后调用（胜利/消除/连击等） */
+function checkAch(){ for(const a of ACHIEVEMENTS){ if(!state.ach[a.id] && a.check()) unlockAch(a.id); } }
+/* ---------- 每日挑战：日期种子 → 全服同一关 ---------- */
+function todayStr(){
+  const d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function dailySeed(){ const s=todayStr(); let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); } return h>>>0; }
+function buildDailyDef(seed){
+  const rng=mulberry32(seed);
+  const count=26+Math.floor(rng()*10);   // 26~35 泡：中等规模，1~2 分钟一局
+  const colors=4+Math.floor(rng()*2);    // 4~5 色
+  const ice=Math.floor(rng()*3);         // 0~2 冰
+  const bomb=1+Math.floor(rng()*2);      // 1~2 炸弹
+  let maxRows=0, cap=0;
+  while(cap<count){ cap += (maxRows%2===0?8:7); maxRows++; }
+  maxRows=Math.max(3,maxRows);
+  const shots=count*2+6;                 // 宽松限步：重在参与感
+  return { count, colors, ice, stone:0, bomb, rate:.08, swaps:3, shots, maxRows, name:'每日挑战' };
+}
+/* 开始每日挑战：种子棋盘 + 确定性队列（全服同题同发牌） */
+function startDaily(seedOverride){
+  const seed=seedOverride!=null?seedOverride:dailySeed();
+  state.dailySeed=seed;
+  const def=buildDailyDef(seed);
+  const rng=mulberry32((seed^0x9E3779B9)>>>0);
+  state.mode='daily'; state.customDef=def; state.rngFn=rng;
+  state.cells={};
+  const spots=[];
+  for(let r=0;r<def.maxRows && spots.length<def.count;r++){
+    for(let c=0;c<colsInRow(r) && spots.length<def.count;c++) spots.push([r,c]);
+  }
+  for(const [r,c] of spots) setCellRaw(r,c,makeCell(Math.floor(rng()*def.colors)));
+  const lower=spots.filter(([r])=>r>=2);
+  const place=(t,cnt)=>{
+    for(let i=0;i<cnt && lower.length;i++){
+      const idx=Math.floor(rng()*lower.length);
+      const [r,c]=lower.splice(idx,1)[0];
+      setCellRaw(r,c,makeCell(t));
+    }
+  };
+  place('I',def.ice); place('B',def.bomb);
+  if(def.ice) maybeIntro('I');
+  if(def.bomb) maybeIntro('B');
+  if(def.rate>0){ maybeIntro('R'); maybeIntro('L'); }
+  state.specialRate=def.rate;
+  state.shotsLeft=def.shots;
+  state.swapsLeft=def.swaps;
+  state.score=0; state.flying=null; state.particles=[]; state.falling=[]; state.flashes=[]; state.won=false;
+  state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
+  state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
+  state.isNewBest=false; state.lastBonus=0;
+  initQueue();
+  state.screen='game';
+}
 /* 限步/三星目标表：由「实测可通关」仿真生成（50关 × 80次真实队列模拟）
    限步 = ceil(P90 × 1.3) + 3（前 90% 真实对局发数再留 30%+3 余量），
    三星 = ceil(P50 × 1.15) + 1（中等偏优发挥即可三星），均单调不减、三星 ≤ 限步-3 */
@@ -136,6 +222,11 @@ const state = {
   popups:[],
   seenSpecials:{},     // 已介绍过的特殊泡泡类型（持久化）
   tutorialDone:false,  // 第1关新手教程是否已完成（持久化）
+  dailyBest:{}, dailyDates:{}, dailyDef:null, rngFn:null,   // 每日挑战（持久化 最佳分/已通日期）
+  ach:{},              // 已解锁成就（持久化）
+  themeOwned:['meadow'], themeCurrent:'meadow',             // 主题屋（持久化）
+  totalPoppedEver:0, maxComboEver:0,                        // 生涯累计（持久化，供成就）
+  encourage:'',        // 失败鼓励语
   lastBonus:0, chapterClear:-1, isNewBest:false,
   reduceMotion:false,
   shakeT:0,
@@ -191,6 +282,7 @@ function makeCell(t){ return t==='I' ? {t:'I',hp:2} : {t}; }
 function buildLevel(n){
   const L=LEVELS[n-1];
   const rng=mulberry32(n*7919+13);
+  state.rngFn=null;   // 官方关卡用真随机队列
   state.cells={};
   // 按 count 从顶行往下铺（泡泡数逐关加速递增 6→75）
   const spots=[];
@@ -223,6 +315,7 @@ function buildLevel(n){
   initQueue();
 }
 function buildCustom(def){
+  state.rngFn=null;   // 自制关卡用真随机队列
   state.cells={};
   for(const it of def.cells){
     if(it.t===undefined || it.t===null) continue;
@@ -262,15 +355,17 @@ function hasStones(){
   return false;
 }
 /* ---------- 智能发泡：只发场上仍存在的颜色；连歪两次发保底 ---------- */
+/* 每日挑战使用确定性随机源（全服同题同队列），其它模式用 Math.random */
+function gameRand(){ return state.rngFn ? state.rngFn() : Math.random(); }
 function rollNew(){
-  if(Math.random() < (state.specialRate||0)){
+  if(gameRand() < (state.specialRate||0)){
     const s=['R','B','L'];
-    return s[(Math.random()*3)|0];
+    return s[(gameRand()*3)|0];
   }
   const pool=presentNormalColors();
   // 石头存在且当前没有炸弹在手 → 把炸弹加入候选池，保证石头永远炸得掉
   if(pool.length && hasStones() && state.cur!=='B' && !state.queue.includes('B')) pool.push('B');
-  return (pool.length?pool:[0])[(Math.random()*(pool.length?pool.length:1))|0];
+  return (pool.length?pool:[0])[(gameRand()*(pool.length?pool.length:1))|0];
 }
 function sanitize(t){
   if(typeof t==='number'){
@@ -312,6 +407,7 @@ function finishShot(popped){
   if(popped>0){
     state.combo++;
     state.maxCombo=Math.max(state.maxCombo,state.combo);
+    if(state.maxCombo>state.maxComboEver) state.maxComboEver=state.maxCombo;
   } else {
     state.combo=0;
   }
@@ -452,6 +548,8 @@ function resolveShot(r,c){
 /* 落地结算统一入口：无论是否消除都要推进队列并检查胜负 */
 function settleLanding(popped){
   state.totalPopped+=popped;
+  state.totalPoppedEver+=popped;                      // 生涯累计（成就）
+  if(state.maxCombo>state.maxComboEver) state.maxComboEver=state.maxCombo;
   finishShot(popped);
 }
 function checkEnd(){
@@ -465,6 +563,16 @@ function checkEnd(){
     const used = total - state.shotsLeft;
     const par = state.mode==='official' ? LEVELS[state.level-1].par : Math.max(6, Math.round(total*0.7));
     state.stars = used<=par ? 3 : used<=par+2 ? 2 : 1;
+    if(state.mode==='daily'){
+      // 每日挑战：记录当日通关与最佳分，不解锁官方进度
+      const d=todayStr();
+      state.dailyDates[d]=true;
+      const prevBest=state.dailyBest[d]||0;
+      state.isNewBest = state.score>prevBest;
+      if(state.isNewBest) state.dailyBest[d]=state.score;
+      pushPopup('📅','每日挑战完成！',[todayStr()+' · 得分 '+state.score,(state.isNewBest&&prevBest>0)?'刷新今日最佳纪录！':'明日同一时间再来挑战']);
+      checkAch();
+    }
     if(state.mode==='official'){
       state.starMap[state.level]=Math.max(state.starMap[state.level]||0, state.stars);
       state.unlocked=Math.max(state.unlocked, Math.min(LEVELS.length, state.level+1));
@@ -486,6 +594,7 @@ function checkEnd(){
       }
       if(state.isNewBest && prev>0) pushPopup('🏆','新纪录！',['第 '+state.level+' 关最佳成绩刷新','得分 '+state.score]);
       if(state.streak>=5 && state.streak%5===0) pushPopup('🔥','连胜 ×'+state.streak, ['连赢加成持续累计中','历史最高连胜 '+state.bestStreak]);
+      checkAch();
     }
     state.screen='result'; sfxWin(); save();
     if(state.mode==='official' && state.level===1 && !state.tutorialDone){
@@ -494,6 +603,9 @@ function checkEnd(){
   } else if(state.shotsLeft<=0 && !state.flying){
     state.won=false; state.screen='result'; state.resultStart=performance.now()/1000; state.starsShown=0;
     if(state.mode==='official') state.streak=0;
+    // 失败鼓励语：随机一句暖心话，减少挫败感
+    const cheers=['差一点点就成功啦！','换个思路，马上就能过！','花园永远为你敞开 🌱','深呼吸，下一发就是奇迹！','高手都是从这里开始的～'];
+    state.encourage=cheers[(Math.random()*cheers.length)|0];
     sfxLose(); save();
   }
 }
@@ -584,6 +696,9 @@ function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({
   streak:state.streak, bestStreak:state.bestStreak, menuPage:state.menuPage, chapterClear:state.chapterClear,
   reduceMotion:state.reduceMotion, muted:state.muted, customLevels:state.customLevels,
   seenSpecials:state.seenSpecials, tutorialDone:state.tutorialDone,
+  dailyBest:state.dailyBest, dailyDates:state.dailyDates, ach:state.ach,
+  themeOwned:state.themeOwned, themeCurrent:state.themeCurrent,
+  totalPoppedEver:state.totalPoppedEver, maxComboEver:state.maxComboEver,
 })); }catch(e){} }
 function load(){ try{
   const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'{}');
@@ -595,6 +710,11 @@ function load(){ try{
   state.customLevels=Array.isArray(d.customLevels)?d.customLevels.slice(0,12):[];
   state.seenSpecials=d.seenSpecials||{};
   state.tutorialDone=!!d.tutorialDone;
+  state.dailyBest=d.dailyBest||{}; state.dailyDates=d.dailyDates||{};
+  state.ach=d.ach||{};
+  state.themeOwned=Array.isArray(d.themeOwned)&&d.themeOwned.length?d.themeOwned:['meadow'];
+  state.themeCurrent=THEMES.some(t=>t.id===d.themeCurrent)?d.themeCurrent:'meadow';
+  state.totalPoppedEver=d.totalPoppedEver||0; state.maxComboEver=d.maxComboEver||0;
 }catch(e){} }
 
 /* ---------------- 创意工坊 ---------------- */
@@ -676,7 +796,15 @@ function edBtns(){ return {
   back:{x:286,y:H-64,w:120,h:46},
 }; }
 function cusNewBtn(){ return {x:W/2-110,y:H-76,w:220,h:48}; }
-function menuWorkshopBtn(){ return {x:W/2-110,y:548,w:220,h:48}; }
+function menuWorkshopBtn(){ return {x:W/2-110,y:500,w:220,h:48}; }
+/* 菜单功能入口行：每日挑战 / 成就馆 / 主题屋 */
+function menuFeatureBtns(){
+  return [
+    {x:14, y:440, w:126, h:50, id:'daily'},
+    {x:147,y:440, w:126, h:50, id:'ach'},
+    {x:280,y:440, w:126, h:50, id:'themes'},
+  ];
+}
 
 /* ---------------- 输入 ---------------- */
 function canvasXY(e){ const r=canvas.getBoundingClientRect(); return { x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height) }; }
@@ -742,7 +870,55 @@ function handleDown(p){
     if(tab>=0){ state.menuPage=tab; tone(700,.06,'triangle',.05); save(); return; }
     const lv=menuGridHit(p);
     if(lv>0 && lv<=state.unlocked){ state.mode='official'; state.level=lv; buildLevel(lv); state.screen='game'; return; }
+    for(const b of menuFeatureBtns()){
+      if(inBox(p,b)){
+        tone(700,.06,'triangle',.05);
+        if(b.id==='daily'){ state.screen='daily'; }
+        else if(b.id==='ach'){ state.screen='ach'; }
+        else { state.screen='themes'; }
+        return;
+      }
+    }
     if(inBox(p,menuWorkshopBtn())){ state.screen='custom'; return; }
+    return;
+  }
+  if(state.screen==='daily'){
+    if(inSound(p)){ toggleMute(); return; }
+    if(inBack(p)){ state.screen='menu'; return; }
+    // 开始今日挑战按钮
+    if(p.x>=W/2-110 && p.x<=W/2+110 && p.y>=430 && p.y<=482){
+      const d=todayStr();
+      if(state.dailyDates[d]){ toast('今日挑战已完成，明天再来～'); return; }
+      startDaily(); return;
+    }
+    return;
+  }
+  if(state.screen==='ach'){
+    if(inSound(p)){ toggleMute(); return; }
+    if(inBack(p)){ state.screen='menu'; return; }
+    return;
+  }
+  if(state.screen==='themes'){
+    if(inSound(p)){ toggleMute(); return; }
+    if(inBack(p)){ state.screen='menu'; return; }
+    const ts=totalStars();
+    for(let i=0;i<THEMES.length;i++){
+      const y=118+i*72;
+      if(p.y>=y && p.y<=y+62 && p.x>=16 && p.x<=W-16){
+        const th=THEMES[i];
+        if(state.themeOwned.includes(th.id)){
+          state.themeCurrent=th.id; tone(800,.08,'triangle',.07); save();
+          toast('已切换到「'+th.name+'」主题');
+        } else if(ts>=th.need){
+          state.themeOwned.push(th.id); state.themeCurrent=th.id;
+          tone(880,.1,'triangle',.08); tone(1175,.14,'triangle',.07,.08);
+          save(); toast('🎉 解锁「'+th.name+'」主题！');
+        } else {
+          toast('还差 '+(th.need-ts)+' 颗星解锁「'+th.name+'」');
+        }
+        return;
+      }
+    }
     return;
   }
   if(state.screen==='custom'){
@@ -797,7 +973,7 @@ function handleDown(p){
       state.swapT=.3; tone(700,.07,'triangle',.07);
       return;
     }
-    if(inBack(p)){ state.screen= state.mode==='test' ? 'editor' : state.mode==='custom' ? 'custom' : 'menu'; return; }
+    if(inBack(p)){ state.screen= state.mode==='test' ? 'editor' : state.mode==='custom' ? 'custom' : state.mode==='daily' ? 'daily' : 'menu'; return; }
     updateAim(p);
   }
 }
@@ -828,6 +1004,7 @@ function drawSoundBtn(){
 
 function replayCurrent(){
   if(state.mode==='official') buildLevel(state.level);
+  else if(state.mode==='daily') startDaily(state.dailySeed);
   else buildCustom(state.customDef);
   state.screen='game';
 }
@@ -840,8 +1017,9 @@ function resultButtons(){
   }
   const backAct = state.mode==='test' ? ()=>{ state.screen='editor'; }
     : state.mode==='custom' ? ()=>{ state.screen='custom'; }
+    : state.mode==='daily' ? ()=>{ state.screen='daily'; }
     : ()=>{ state.screen='menu'; };
-  const backLabel = state.mode==='test' ? '回到编辑器' : state.mode==='custom' ? '回到工坊' : '回到选关';
+  const backLabel = state.mode==='test' ? '回到编辑器' : state.mode==='custom' ? '回到工坊' : state.mode==='daily' ? '回到每日挑战' : '回到选关';
   list.push([{x:W/2-132,y:480,w:264,h:44,label:backLabel}, backAct]);
   return list;
 }
@@ -918,31 +1096,67 @@ function drawCellShape(x,y,r,cell,alpha){
   }
   ctx.restore();
 }
+function curTheme(){ return THEMES.find(t=>t.id===state.themeCurrent)||THEMES[0]; }
 function drawBG(){
+  const TH=curTheme();
   const g=ctx.createLinearGradient(0,0,0,H);
-  g.addColorStop(0,'#cdeaf7'); g.addColorStop(.45,'#e6f7ef'); g.addColorStop(1,'#fff6ec');
+  g.addColorStop(0,TH.sky[0]); g.addColorStop(.45,TH.sky[1]); g.addColorStop(1,TH.sky[2]);
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
   // 远山剪影
-  ctx.fillStyle='rgba(150,210,185,.28)';
+  ctx.fillStyle=TH.hill;
   ctx.beginPath(); ctx.moveTo(0,H); ctx.lineTo(0,H-120);
   ctx.quadraticCurveTo(70,H-180,150,H-140); ctx.quadraticCurveTo(230,H-200,310,H-150);
   ctx.quadraticCurveTo(370,H-175,420,H-130); ctx.lineTo(420,H); ctx.closePath(); ctx.fill();
-  // 飘云（缓慢移动）
   const t=performance.now()/1000;
-  ctx.fillStyle='rgba(255,255,255,.8)';
-  for(const [bx,by,br,sp] of [[((t*8)%520)-50,60,16,8],[((t*12)%620)-100,44,13,12],[((t*6)%500)-40,88,10,6]]){
-    const x=bx; ctx.beginPath();
-    ctx.arc(x,by,br,0,Math.PI*2); ctx.arc(x+br*.8,by+2,br*.7,0,Math.PI*2); ctx.arc(x-br*.8,by+3,br*.65,0,Math.PI*2); ctx.fill();
+  if(TH.deco==='flowers' || TH.deco==='waves'){
+    // 飘云（缓慢移动）
+    ctx.fillStyle='rgba(255,255,255,.8)';
+    for(const [bx,by,br,sp] of [[((t*8)%520)-50,60,16,8],[((t*12)%620)-100,44,13,12],[((t*6)%500)-40,88,10,6]]){
+      const x=bx; ctx.beginPath();
+      ctx.arc(x,by,br,0,Math.PI*2); ctx.arc(x+br*.8,by+2,br*.7,0,Math.PI*2); ctx.arc(x-br*.8,by+3,br*.65,0,Math.PI*2); ctx.fill();
+    }
+  }
+  if(TH.deco==='stars'){
+    // 星夜：闪烁星星 + 月亮
+    for(let i=0;i<24;i++){
+      const sx=(i*97+31)%W, sy=(i*53+17)%180+10;
+      const tw=.4+.6*Math.abs(Math.sin(t*1.5+i));
+      ctx.globalAlpha=tw; ctx.fillStyle='#fff8dc';
+      ctx.beginPath(); ctx.arc(sx,sy,i%4===0?2.2:1.3,0,Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=TH.sky[0]; ctx.beginPath(); ctx.arc(342,64,18,0,Math.PI*2); ctx.fill();
+  }
+  if(TH.deco==='petals'){
+    // 樱花雨：飘落花瓣
+    for(let i=0;i<10;i++){
+      const px=((i*127+t*26)%480)-30, py=((i*211+t*(34+i*3))%(H+40))-20;
+      ctx.globalAlpha=.7; ctx.fillStyle=i%2?'#ffc4d6':'#ffdbe6';
+      ctx.save(); ctx.translate(px,py); ctx.rotate(t+i);
+      ctx.beginPath(); ctx.ellipse(0,0,5,3,0,0,Math.PI*2); ctx.fill(); ctx.restore();
+    }
+    ctx.globalAlpha=1;
   }
   ctx.globalAlpha=.9;
-  // 草地
+  // 草地/地面
   const gg=ctx.createLinearGradient(0,H-150,0,H);
-  gg.addColorStop(0,'rgba(180,225,150,0)'); gg.addColorStop(1,'rgba(150,205,125,.65)');
+  gg.addColorStop(0,'rgba(255,255,255,0)'); gg.addColorStop(1,TH.grass);
   ctx.fillStyle=gg; ctx.fillRect(0,H-150,W,150);
-  // 小花
-  for(const [fx,fy,fc] of [[40,H-90,'#ffb3c7'],[120,H-58,'#ffd97a'],[200,H-100,'#fff'],[300,H-62,'#b9a5f0'],[370,H-88,'#ffb38a'],[250,H-46,'#ff9eb5']]){
-    ctx.fillStyle=fc; ctx.beginPath(); ctx.arc(fx,fy,5,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='#ffd97a'; ctx.beginPath(); ctx.arc(fx,fy,2,0,Math.PI*2); ctx.fill();
+  if(TH.deco==='waves'){
+    // 海浪纹
+    ctx.strokeStyle='rgba(255,255,255,.75)'; ctx.lineWidth=2.5;
+    for(let wv=0;wv<3;wv++){
+      ctx.beginPath();
+      for(let x=0;x<=W;x+=8){ ctx.lineTo(x, H-58+wv*20+Math.sin(x/26+t*2+wv)*4); }
+      ctx.stroke();
+    }
+  } else if(TH.deco==='flowers'){
+    // 小花
+    for(const [fx,fy,fc] of [[40,H-90,'#ffb3c7'],[120,H-58,'#ffd97a'],[200,H-100,'#fff'],[300,H-62,'#b9a5f0'],[370,H-88,'#ffb38a'],[250,H-46,'#ff9eb5']]){
+      ctx.fillStyle=fc; ctx.beginPath(); ctx.arc(fx,fy,5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#ffd97a'; ctx.beginPath(); ctx.arc(fx,fy,2,0,Math.PI*2); ctx.fill();
+    }
   }
   ctx.globalAlpha=1;
 }
@@ -981,6 +1195,7 @@ function drawHUD(){
   ctx.fillStyle='#3f8f77'; ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
   const title = state.mode==='official' ? CHAPTERS[Math.floor((state.level-1)/10)].icon+' 第 '+state.level+' 关'
     : state.mode==='test' ? '试玩关卡'
+    : state.mode==='daily' ? '📅 每日挑战'
     : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
   ctx.fillText(title,W/2,26);
   ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
@@ -1096,7 +1311,7 @@ function drawIntroOverlay(){
   ctx.fillStyle='rgba(255,255,255,.86)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center'; ctx.textBaseline='middle';
   const title = state.mode==='official' ? CHAPTERS[Math.floor((state.level-1)/10)].icon+' 第 '+state.level+' 关 · '+CHAPTERS[Math.floor((state.level-1)/10)].name
-    : state.mode==='test' ? '试玩关卡' : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
+    : state.mode==='test' ? '试玩关卡' : state.mode==='daily' ? '每日挑战 · '+todayStr() : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
   ctx.fillStyle='#3f8f77'; ctx.font='bold 26px "Segoe UI",system-ui,sans-serif';
   const isTutorial = state.mode==='official' && state.level===1 && !state.tutorialDone;
   ctx.fillText('🫧 '+title,W/2,isTutorial?118:130);
@@ -1220,6 +1435,28 @@ function drawMenu(){
     ctx.fillStyle='#c8d7d0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
     ctx.fillText('历史最高连胜 '+state.bestStreak+' · 连赢有额外加分',W/2,409);
   }
+  // 功能入口行：每日挑战 / 成就馆 / 主题屋
+  const fbs=menuFeatureBtns();
+  const d=todayStr(), dailyDone=!!state.dailyDates[d];
+  let achGot=0; for(const a of ACHIEVEMENTS) if(state.ach[a.id]) achGot++;
+  const fbInfo=[
+    { icon:'📅', label:'每日挑战', sub:dailyDone?'今日已完成 ✓':'今日待挑战', hl:!dailyDone },
+    { icon:'🏅', label:'成就馆', sub:achGot+'/'+ACHIEVEMENTS.length+' 已解锁', hl:achGot<ACHIEVEMENTS.length },
+    { icon:'🎨', label:'主题屋', sub:curTheme().icon+' '+curTheme().name, hl:false },
+  ];
+  for(let i=0;i<3;i++){
+    const b=fbs[i], fi=fbInfo[i];
+    ctx.fillStyle= fi.hl?'rgba(255,251,235,.97)':'rgba(255,255,255,.9)';
+    roundRect(b.x,b.y,b.w,b.h,14); ctx.fill();
+    ctx.strokeStyle= fi.hl?'#e8b84a':'#9fd0bc'; ctx.lineWidth= fi.hl?2:1.5;
+    roundRect(b.x,b.y,b.w,b.h,14); ctx.stroke();
+    ctx.font='16px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(fi.icon,b.x+22,b.y+25);
+    ctx.fillStyle='#3f8f77'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(fi.label,b.x+74,b.y+18);
+    ctx.fillStyle='#a8bcb2'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(fi.sub,b.x+74,b.y+36);
+  }
   // 工坊入口
   const wb=menuWorkshopBtn();
   ctx.fillStyle='#ffb38a'; roundRect(wb.x,wb.y,wb.w,wb.h,24); ctx.fill();
@@ -1234,6 +1471,125 @@ function drawMenu(){
   ctx.fillText(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
   drawSoundBtn();
   drawPopups();
+  drawToast();
+}
+/* ---------------- 每日挑战 / 成就馆 / 主题屋界面 ---------------- */
+function drawDailyScreen(){
+  drawBG();
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('← 返回',50,26);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 22px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('📅 每日挑战',W/2,26);
+  const d=todayStr();
+  const done=!!state.dailyDates[d];
+  const def=buildDailyDef(dailySeed());
+  // 情报卡
+  ctx.fillStyle='rgba(255,255,255,.92)'; roundRect(30,90,W-60,290,20); ctx.fill();
+  ctx.strokeStyle= done?'#9fd0bc':'#e8b84a'; ctx.lineWidth=2.5; roundRect(30,90,W-60,290,20); ctx.stroke();
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(d+(done?' · 已完成 ✓':''),W/2,126);
+  ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('全球玩家今天面对同一道关卡',W/2,152);
+  ctx.font='14px "Segoe UI",system-ui,sans-serif';
+  const info=[
+    ['🎈 场上泡泡', def.count+' 个'],
+    ['🎨 颜色数', def.colors+' 种'],
+    ['🧊 冰块', def.ice+' 个'],
+    ['💣 炸弹', def.bomb+' 个'],
+    ['🎯 限步', def.shots+' 步'],
+    ['🏆 今日最佳', done?String(state.dailyBest[d]||0)+' 分':'—'],
+  ];
+  for(let i=0;i<info.length;i++){
+    ctx.fillStyle='#7fb8a4'; ctx.textAlign='left';
+    ctx.fillText(info[i][0],56,192+i*30);
+    ctx.fillStyle='#3f8f77'; ctx.textAlign='right';
+    ctx.fillText(info[i][1],W-56,192+i*30);
+  }
+  ctx.textAlign='center';
+  // 开始按钮
+  const canStart=!done;
+  ctx.fillStyle= canStart?'#4caf93':'#b8c9c1';
+  roundRect(W/2-110,430,220,52,26); ctx.fill();
+  if(canStart){ const pulse=.5+Math.sin(performance.now()/350)*.15; ctx.fillStyle='rgba(255,255,255,'+pulse+')'; roundRect(W/2-110,430,220,52,26); ctx.fill(); }
+  ctx.fillStyle='#fff'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(done?'今日已完成 ✓':'开始挑战 ▶',W/2,457);
+  ctx.fillStyle='#a8bcb2'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(done?'明天 0 点刷新新关卡':'通关后可获得「每日园丁」成就',W/2,502);
+  drawSoundBtn();
+  drawToast();
+}
+function drawAchScreen(){
+  drawBG();
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('← 返回',50,26);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 22px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🏅 成就馆',W/2,26);
+  let got=0; for(const a of ACHIEVEMENTS) if(state.ach[a.id]) got++;
+  ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('已解锁 '+got+' / '+ACHIEVEMENTS.length,W/2,52);
+  for(let i=0;i<ACHIEVEMENTS.length;i++){
+    const a=ACHIEVEMENTS[i];
+    const unlocked=!!state.ach[a.id];
+    const y=76+i*52;
+    ctx.fillStyle= unlocked?'rgba(255,251,235,.95)':'rgba(230,238,234,.85)';
+    roundRect(16,y,W-32,44,14); ctx.fill();
+    ctx.strokeStyle= unlocked?'#e8b84a':'#c8d7d0'; ctx.lineWidth= unlocked?2:1.5;
+    roundRect(16,y,W-32,44,14); ctx.stroke();
+    ctx.font='20px "Segoe UI",system-ui,sans-serif';
+    ctx.globalAlpha= unlocked?1:.45;
+    ctx.fillText(a.icon,40,y+22);
+    ctx.globalAlpha=1;
+    ctx.fillStyle= unlocked?'#3f8f77':'#9ab0a6'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='left';
+    ctx.fillText(a.name+(unlocked?'':' 🔒'),62,y+15);
+    ctx.fillStyle= unlocked?'#7fb8a4':'#a8bcb2'; ctx.font='11px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(a.desc,62,y+32);
+    if(unlocked){ ctx.textAlign='right'; ctx.fillStyle='#e8b84a'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif'; ctx.fillText('✓',W-34,y+22); }
+    ctx.textAlign='center';
+  }
+  drawSoundBtn();
+  drawToast();
+}
+function drawThemesScreen(){
+  drawBG();
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('← 返回',50,26);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 22px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🎨 主题屋',W/2,26);
+  const ts=totalStars();
+  ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('⭐ 当前持有 '+ts+' 颗星 · 用星星解锁新背景',W/2,52);
+  for(let i=0;i<THEMES.length;i++){
+    const th=THEMES[i];
+    const owned=state.themeOwned.includes(th.id);
+    const cur=state.themeCurrent===th.id;
+    const canBuy=!owned && ts>=th.need;
+    const y=118+i*72;
+    ctx.fillStyle= cur?'rgba(255,251,235,.97)':'rgba(255,255,255,.9)';
+    roundRect(16,y,W-32,62,16); ctx.fill();
+    ctx.strokeStyle= cur?'#e8b84a': (owned||canBuy)?'#9fd0bc':'#c8d7d0'; ctx.lineWidth= cur?2.5:2;
+    roundRect(16,y,W-32,62,16); ctx.stroke();
+    // 主题色预览
+    const pg=ctx.createLinearGradient(32,y+12,32,y+50);
+    pg.addColorStop(0,th.sky[0]); pg.addColorStop(1,th.sky[2]);
+    ctx.fillStyle=pg; roundRect(32,y+12,54,38,10); ctx.fill();
+    ctx.font='18px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(th.icon,59,y+32);
+    ctx.fillStyle='#3f8f77'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='left';
+    ctx.fillText(th.name+(cur?' · 使用中':''),100,y+24);
+    ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif';
+    const status= owned?(cur?'点击其他主题可切换':'点击使用')
+      : canBuy?'⭐ '+th.need+' 解锁（点击立即解锁）'
+      : '⭐ '+th.need+' 颗星解锁（还差 '+(th.need-ts)+'）';
+    ctx.fillText(status,100,y+44);
+    ctx.textAlign='right';
+    if(cur){ ctx.fillStyle='#e8b84a'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif'; ctx.fillText('✓',W-34,y+32); }
+    else if(!owned && !canBuy){ ctx.fillStyle='#c8d7d0'; ctx.font='16px "Segoe UI",system-ui,sans-serif'; ctx.fillText('🔒',W-34,y+32); }
+    ctx.textAlign='center';
+  }
+  drawSoundBtn();
   drawToast();
 }
 function drawCustom(){
@@ -1366,9 +1722,11 @@ function drawResult(){
     }
   } else {
     ctx.fillStyle='#e5718f'; ctx.font='bold 32px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText('步数用完了…',W/2,200);
-    ctx.fillStyle='#7fb8a4'; ctx.font='15px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText('再试一次，你可以的！',W/2,248);
+    ctx.fillText('步数用完了…',W/2,196);
+    ctx.fillStyle='#3f8f77'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('💪 '+state.encourage,W/2,240);
+    ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('再试一次，你可以的！',W/2,266);
   }
   // 本关统计卡
   const sw=state.mode==='official'?LEVELS[state.level-1].swaps:3;
@@ -1442,6 +1800,9 @@ function draw(){
   if(state.screen==='menu') drawMenu();
   else if(state.screen==='custom') drawCustom();
   else if(state.screen==='editor') drawEditor();
+  else if(state.screen==='daily') drawDailyScreen();
+  else if(state.screen==='ach') drawAchScreen();
+  else if(state.screen==='themes') drawThemesScreen();
   else if(state.screen==='game') drawGame();
   else drawResult();
 }
@@ -1460,7 +1821,7 @@ function frame(now){
 
 /* ---------------- 验证钩子 ---------------- */
 window.__GARDEN_TEST__ = {
-  version:'0.4',
+  version:'0.5',
   loadLevel(n){ state.mode='official'; state.level=n; buildLevel(n); state.screen='game'; },
   loadCustomDef(def){ state.mode='custom'; state.customDef=def; buildCustom(def); state.screen='game'; },
   state(){ return { screen:state.screen, mode:state.mode, level:state.level, shotsLeft:state.shotsLeft, score:state.score, bubbles:Object.keys(state.cells).length, won:state.won, stars:state.stars }; },
@@ -1537,6 +1898,34 @@ window.__GARDEN_TEST__ = {
   deleteCustom(i){ if(i>=0&&i<state.customLevels.length){ state.customLevels.splice(i,1); save(); return true; } return false; },
   openCustomScreen(){ state.screen='custom'; },
   openEditor(){ state.screen='editor'; },
+  /* ---- v0.5：每日挑战 / 成就 / 主题屋 ---- */
+  today(){ return todayStr(); },
+  dailySeedOf(s){ let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); } return h>>>0; },
+  dailyDef(seed){ return buildDailyDef(seed); },
+  startDaily(seed){ startDaily(seed); },
+  dailyDone(d){ return !!state.dailyDates[d||todayStr()]; },
+  dailyBest(d){ return state.dailyBest[d||todayStr()]||0; },
+  dailyDates(){ return Object.keys(state.dailyDates); },
+  resetDaily(){ state.dailyDates={}; state.dailyBest={}; },
+  achCount(){ let n=0; for(const k in state.ach) if(state.ach[k]) n++; return n; },
+  achUnlocked(id){ return !!state.ach[id]; },
+  achList(){ return ACHIEVEMENTS.map(a=>({id:a.id,unlocked:!!state.ach[a.id]})); },
+  resetAch(){ state.ach={}; },
+  forceAch(id){ return unlockAch(id); },
+  themes(){ return THEMES.map(t=>({id:t.id,need:t.need,owned:state.themeOwned.includes(t.id)})); },
+  themeCurrent(){ return state.themeCurrent; },
+  setTheme(id){ if(THEMES.some(t=>t.id===id)&&state.themeOwned.includes(id)){ state.themeCurrent=id; save(); return true; } return false; },
+  buyTheme(id){
+    const th=THEMES.find(t=>t.id===id);
+    if(!th||state.themeOwned.includes(id)||totalStars()<th.need) return false;
+    state.themeOwned.push(id); state.themeCurrent=id; save(); return true;
+  },
+  resetThemes(){ state.themeOwned=['meadow']; state.themeCurrent='meadow'; },
+  totalPoppedEver(){ return state.totalPoppedEver; },
+  maxComboEver(){ return state.maxComboEver; },
+  resetEver(){ state.totalPoppedEver=0; state.maxComboEver=0; },
+  encourage(){ return state.encourage; },
+  goScreen(s){ state.screen=s; },
   clickAt(x,y){ const r=canvas.getBoundingClientRect();
     canvas.dispatchEvent(new PointerEvent('pointerdown',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true}));
     canvas.dispatchEvent(new PointerEvent('pointerup',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true})); },
