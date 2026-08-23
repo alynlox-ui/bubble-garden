@@ -85,7 +85,7 @@ def main() -> int:
         "--window-size=520,760", index.as_uri(),
     ]
     proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    report = {"game": "bubble-garden-demo-v0.4", "checks": [], "runtimeErrors": [], "screenshots": []}
+    report = {"game": "bubble-garden-demo-v0.5", "checks": [], "runtimeErrors": [], "screenshots": []}
 
     def check(name, ok, detail=None):
         entry = {"name": name, "ok": bool(ok)}
@@ -125,7 +125,7 @@ def main() -> int:
         check("hook_ready", ready)
         if not ready:
             raise RuntimeError("__GARDEN_TEST__ not exposed")
-        check("version_v04", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.4")
+        check("version_v05", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.5")
 
         # 2) 画布尺寸
         size = evaluate(ws, "({w:document.querySelector('#game').width,h:document.querySelector('#game').height})")
@@ -738,6 +738,106 @@ def main() -> int:
         check("special_intro_stone_bomb", 'S' in seen12 and 'B' in seen12, seen12)
         evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
         evaluate(ws, "window.__GARDEN_TEST__.resetSpecials()")
+
+        # ---- v0.5 新功能 ----
+        # 19) 每日挑战：种子确定性（同种子同棋盘同队列，不同种子不同题）
+        evaluate(ws, "window.__GARDEN_TEST__.startDaily(12345)")
+        q1 = evaluate(ws, "window.__GARDEN_TEST__.queue()")
+        c1 = evaluate(ws, "JSON.stringify(window.__GARDEN_TEST__.getCells())")
+        evaluate(ws, "window.__GARDEN_TEST__.startDaily(12345)")
+        q2 = evaluate(ws, "window.__GARDEN_TEST__.queue()")
+        c2 = evaluate(ws, "JSON.stringify(window.__GARDEN_TEST__.getCells())")
+        evaluate(ws, "window.__GARDEN_TEST__.startDaily(99999)")
+        c3 = evaluate(ws, "JSON.stringify(window.__GARDEN_TEST__.getCells())")
+        check("daily_deterministic_seed", q1 == q2 and c1 == c2 and c1 != c3,
+              {"q1": q1, "q2": q2, "same_board": c1 == c2, "diff_seed_diff_board": c1 != c3})
+
+        # 19b) 每日挑战关卡结构合理（26~35泡 / 4~5色 / 限步宽松）
+        defs_ok = True
+        detail = []
+        for seed in (7, 12345, 99999, 20260823, 42424242):
+            dd = evaluate(ws, f"window.__GARDEN_TEST__.dailyDef({seed})")
+            detail.append(dd)
+            if not (26 <= dd["count"] <= 35 and 4 <= dd["colors"] <= 5
+                    and dd["shots"] == dd["count"] * 2 + 6 and dd["bomb"] >= 1):
+                defs_ok = False
+        check("daily_def_shape", defs_ok, detail)
+
+        # 19c) 每日挑战通关：记录日期+最佳分，不解锁官方进度，解锁「每日园丁」成就
+        evaluate(ws, "window.__GARDEN_TEST__.resetProgress();window.__GARDEN_TEST__.resetDaily();window.__GARDEN_TEST__.resetAch()")
+        evaluate(ws, "window.__GARDEN_TEST__.startDaily(20260823)")
+        evaluate(ws, "window.__GARDEN_TEST__.startGame()")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0)")
+        evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,3,0)")
+        st_d = evaluate(ws, "window.__GARDEN_TEST__.state()")
+        today = evaluate(ws, "window.__GARDEN_TEST__.today()")
+        done_d = evaluate(ws, "window.__GARDEN_TEST__.dailyDone()")
+        best_d = evaluate(ws, "window.__GARDEN_TEST__.dailyBest()")
+        unlocked_d = evaluate(ws, "window.__GARDEN_TEST__.unlocked()")
+        ach_daily = evaluate(ws, "window.__GARDEN_TEST__.achUnlocked('daily')")
+        check("daily_win_records", st_d["won"] is True and st_d["mode"] == "daily" and done_d is True
+              and best_d > 0 and unlocked_d == 1 and ach_daily is True,
+              {"state": st_d, "today": today, "done": done_d, "best": best_d,
+               "unlocked": unlocked_d, "ach_daily": ach_daily})
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+
+        # 20) 成就系统：自然路径解锁（初绽 + 连击高手）
+        evaluate(ws, "window.__GARDEN_TEST__.resetAch();window.__GARDEN_TEST__.resetProgress()")
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(3);window.__GARDEN_TEST__.startGame()")
+        for _ in range(5):
+            evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0);window.__GARDEN_TEST__.setCell(0,7,1)")
+            evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,3,0)")
+        combo5_now = evaluate(ws, "window.__GARDEN_TEST__.combo()")
+        mce = evaluate(ws, "window.__GARDEN_TEST__.maxComboEver()")
+        # 收尾胜利：场上只剩锚定泡(0,7)，补 2 泡凑组 → 胜利触发成就巡检
+        evaluate(ws, "window.__GARDEN_TEST__.setCell(0,5,1);window.__GARDEN_TEST__.setCell(0,6,1)")
+        evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,4,1)")
+        ach_first = evaluate(ws, "window.__GARDEN_TEST__.achUnlocked('first_win')")
+        ach_combo = evaluate(ws, "window.__GARDEN_TEST__.achUnlocked('combo5')")
+        ach_n = evaluate(ws, "window.__GARDEN_TEST__.achCount()")
+        check("achievements_natural_unlock", combo5_now == 5 and mce >= 5
+              and ach_first is True and ach_combo is True and ach_n >= 2,
+              {"combo": combo5_now, "maxComboEver": mce, "first_win": ach_first,
+               "combo5": ach_combo, "count": ach_n})
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+
+        # 20b) 生涯累计：总消除数与最大连击跨局累计
+        evaluate(ws, "window.__GARDEN_TEST__.resetEver()")
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(1);window.__GARDEN_TEST__.startGame()")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0)")
+        evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,3,0)")
+        tpe = evaluate(ws, "window.__GARDEN_TEST__.totalPoppedEver()")
+        check("career_stats_accumulate", tpe >= 3 and evaluate(ws, "window.__GARDEN_TEST__.maxComboEver()") >= 1,
+              {"totalPoppedEver": tpe})
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+
+        # 21) 主题屋：星星门槛解锁 / 切换 / 不足拒绝
+        evaluate(ws, "window.__GARDEN_TEST__.resetProgress();window.__GARDEN_TEST__.resetThemes()")
+        buy_fail = evaluate(ws, "window.__GARDEN_TEST__.buyTheme('sunset')")   # 0 星 → 需要 30
+        evaluate(ws, "for(let i=1;i<=10;i++)window.__GARDEN_TEST__.setStars(i,3)")  # 30 星
+        buy_ok = evaluate(ws, "window.__GARDEN_TEST__.buyTheme('sunset')")
+        cur_t = evaluate(ws, "window.__GARDEN_TEST__.themeCurrent()")
+        sw_ok = evaluate(ws, "window.__GARDEN_TEST__.setTheme('meadow')")
+        sw_no = evaluate(ws, "window.__GARDEN_TEST__.setTheme('starlit')")      # 未拥有
+        buy_lock = evaluate(ws, "window.__GARDEN_TEST__.buyTheme('starlit')")   # 需要 120 星
+        themes = evaluate(ws, "window.__GARDEN_TEST__.themes()")
+        check("theme_shop", buy_fail is False and buy_ok is True and cur_t == "sunset"
+              and sw_ok is True and sw_no is False and buy_lock is False
+              and themes[0]["owned"] is True and themes[1]["owned"] is True,
+              {"buy_fail": buy_fail, "buy_ok": buy_ok, "cur": cur_t,
+               "switch_ok": sw_ok, "switch_unowned": sw_no, "buy_locked": buy_lock})
+        evaluate(ws, "window.__GARDEN_TEST__.resetThemes();window.__GARDEN_TEST__.resetProgress()")
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+
+        # 22) 失败鼓励语：落败时生成非空鼓励文案
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(3);window.__GARDEN_TEST__.startGame()")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0)")
+        evaluate(ws, "window.__GARDEN_TEST__.setShots(0)")
+        evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,1,1)")
+        enc = evaluate(ws, "window.__GARDEN_TEST__.encourage()")
+        lost2 = evaluate(ws, "window.__GARDEN_TEST__.state()")
+        check("loss_encouragement", lost2["won"] is False and isinstance(enc, str) and len(enc) >= 4,
+              {"encourage": enc, "state": lost2})
 
         # 18) 截图：菜单（含特殊泡泡图例 + 工坊入口）
         evaluate(ws, "location.reload()")
