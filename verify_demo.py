@@ -1,5 +1,6 @@
-"""Headless Edge smoke test for Bubble Garden v0.3 (泡泡花园).
+"""Headless Edge smoke test for Bubble Garden v0.4 (泡泡花园).
 Covers: 50 levels / 5 chapters, streak bonus, chapter-clear rewards,
+workshop compliance validation, tutorial level, new-special intro popups,
 special bubbles, cascade engine, creative workshop, core pop/floating rules.
 """
 from __future__ import annotations
@@ -84,7 +85,7 @@ def main() -> int:
         "--window-size=520,760", index.as_uri(),
     ]
     proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    report = {"game": "bubble-garden-demo-v0.3", "checks": [], "runtimeErrors": [], "screenshots": []}
+    report = {"game": "bubble-garden-demo-v0.4", "checks": [], "runtimeErrors": [], "screenshots": []}
 
     def check(name, ok, detail=None):
         entry = {"name": name, "ok": bool(ok)}
@@ -124,7 +125,7 @@ def main() -> int:
         check("hook_ready", ready)
         if not ready:
             raise RuntimeError("__GARDEN_TEST__ not exposed")
-        check("version_v03", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.3")
+        check("version_v04", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.4")
 
         # 2) 画布尺寸
         size = evaluate(ws, "({w:document.querySelector('#game').width,h:document.querySelector('#game').height})")
@@ -220,7 +221,7 @@ def main() -> int:
         mono = all(counts[i] < counts[i+1] for i in range(len(counts)-1))
         early_step = counts[9] - counts[0]     # 前 10 关总增量（应平缓）
         late_step = counts[49] - counts[39]    # 后 10 关总增量（应陡峭）
-        check("bubble_count_increasing", mono and counts[0] == 6 and counts[-1] == 75 and len(counts) == 50,
+        check("bubble_count_increasing", mono and counts[0] == 6 and counts[-1] == 74 and len(counts) == 50,
               {"first": counts[0], "last": counts[-1], "n": len(counts)})
         check("bubble_curve_accelerating", late_step > early_step * 2,
               {"early10": early_step, "late10": late_step, "curve": counts})
@@ -302,25 +303,295 @@ def main() -> int:
         check("swap_exhausted_blocked", ok2 is False and q_used == q_stay,
               {"ok": ok2, "before": q_used, "after": q_stay})
 
-        # 17) 全关可通关性模拟：50 关逐一统计，限步数 ≥ 理论最少发数
-        sim = evaluate(ws, """
-          (() => {
-            const T = window.__GARDEN_TEST__;
-            const results = [];
-            for (let n = 1; n <= T.levelCount(); n++) {
-              T.loadLevel(n);
-              const cells = T.getCells();
-              const normals = cells.filter(c => typeof c.t === 'number');
-              const specials = cells.length - normals.length;
-              const minShots = Math.ceil(normals.length / 3) + Math.ceil(specials / 2);
-              results.push({level:n, bubbles:cells.length, shots:T.levelShots(n), minShots});
+        # 17) v0.4 全关可通关性（真实验证，替代旧「乐观公式」）
+        #     注入镜像求解器：与 Python 仿真同一策略，直接读真实 LEVELS 表与真实棋盘
+        evaluate(ws, r"""
+        window.__POLICY__ = (() => {
+          const R=25, COLS=8, BOMB_RAD=2.6*R, BOARD_TOP=80,
+                BOARD_LEFT=(420-COLS*2*R)/2, ROWH=R*Math.sqrt(3);
+          const colsInRow=r=>r%2===0?COLS:COLS-1;
+          const cellX=(r,c)=>BOARD_LEFT+R+c*2*R+(r%2?R:0);
+          const cellY=r=>BOARD_TOP+R+r*ROWH;
+          const key=(r,c)=>r+','+c;
+          function neighbors(r,c){
+            const e=r%2===0;
+            const lst=e?[[r,c-1],[r,c+1],[r-1,c-1],[r-1,c],[r+1,c-1],[r+1,c]]
+                       :[[r,c-1],[r,c+1],[r-1,c],[r-1,c+1],[r+1,c],[r+1,c+1]];
+            return lst.filter(([rr,cc])=>rr>=0&&cc>=0&&cc<colsInRow(rr));
+          }
+          function cellsToMap(cs){ const m={}; for(const c of cs) m[key(c.r,c.c)]={t:c.t,hp:c.hp}; return m; }
+          function present(b){ const s=new Set(); for(const k in b){ const t=b[k].t; if(typeof t==='number') s.add(t); } return [...s]; }
+          function hasStones(b){ for(const k in b) if(b[k].t==='S') return true; return false; }
+          function dominant(b){ const cnt={}; for(const k in b){ const t=b[k].t; if(typeof t==='number') cnt[t]=(cnt[t]||0)+1; }
+            let best=null,bn=-1; for(const t in cnt) if(cnt[t]>bn){bn=cnt[t];best=+t;} return best; }
+          function bfsWild(b,r,c,color){
+            const seen={}, sk=key(r,c); seen[sk]=1; const stack=[[r,c]], group=[[r,c]];
+            while(stack.length){ const [cr,cc]=stack.pop();
+              for(const [nr,nc] of neighbors(cr,cc)){ const k=key(nr,nc); if(seen[k]) continue;
+                const cell=b[k]; if(!cell) continue;
+                if(cell.t===color||cell.t==='R'){ seen[k]=1; stack.push([nr,nc]); group.push([nr,nc]); } } }
+            return group;
+          }
+          function findFloating(b){
+            const reach={}, stack=[];
+            for(let c=0;c<colsInRow(0);c++){ if(b[key(0,c)]!==undefined){ reach[key(0,c)]=1; stack.push([0,c]); } }
+            while(stack.length){ const [cr,cc]=stack.pop();
+              for(const [nr,nc] of neighbors(cr,cc)){ const k=key(nr,nc);
+                if(b[k]!==undefined && !reach[k]){ reach[k]=1; stack.push([nr,nc]); } } }
+            const out=[]; for(const k in b) if(!reach[k]) out.push(k.split(',').map(Number));
+            return out;
+          }
+          function cascade(b, explQueue, rows){
+            let count=0;
+            while(explQueue.length||rows.size){
+              if(explQueue.length){
+                const [x,y]=explQueue.shift();
+                for(const k in b){ const [rr,cc]=k.split(',').map(Number);
+                  const dx=cellX(rr,cc)-x, dy=cellY(rr)-y;
+                  if(dx*dx+dy*dy<=BOMB_RAD*BOMB_RAD){ const cell=b[k]; delete b[k]; count++;
+                    if(cell.t==='B') explQueue.push([cellX(rr,cc),cellY(rr)]);
+                    if(cell.t==='L') rows.add(rr); } }
+              } else {
+                const r=[...rows][0]; rows.delete(r);
+                for(let c=0;c<colsInRow(r);c++){ const cell=b[key(r,c)];
+                  if(!cell||cell.t==='S') continue; delete b[key(r,c)]; count++;
+                  if(cell.t==='B') explQueue.push([cellX(r,c),cellY(r)]); }
+              }
             }
-            return results;
+            return count;
+          }
+          function popGroup(b, keys){
+            let popped=0; const explQueue=[], rows=new Set(), removed=[];
+            for(const k of keys){ const [r,c]=k.split(',').map(Number); const cell=b[k]; if(!cell) continue;
+              removed.push(k); delete b[k]; popped++;
+              if(cell.t==='B') explQueue.push([cellX(r,c),cellY(r)]);
+              if(cell.t==='L') rows.add(r); }
+            popped+=cascade(b,explQueue,rows);
+            const damaged={};
+            for(const k of removed){ const [r,c]=k.split(',').map(Number);
+              for(const [nr,nc] of neighbors(r,c)){ const nk=key(nr,nc); if(damaged[nk]) continue;
+                const nb=b[nk]; if(nb&&nb.t==='I'){ damaged[nk]=1; nb.hp--;
+                  if(nb.hp<=0){ delete b[nk]; popped++; } } } }
+            let dropped=0;
+            for(const [fr,fc] of findFloating(b)){ delete b[key(fr,fc)]; dropped++; }
+            return [popped,dropped];
+          }
+          function resolveShot(b,r,c){
+            const cell=b[key(r,c)]; if(!cell) return [0,0]; let group;
+            if(cell.t==='R'){ const counts={};
+              for(const [nr,nc] of neighbors(r,c)){ const nb=b[key(nr,nc)];
+                if(nb&&typeof nb.t==='number') counts[nb.t]=(counts[nb.t]||0)+1; }
+              let best=null,bn=0; for(const t in counts) if(counts[t]>bn){bn=counts[t];best=+t;}
+              if(best===null) return [0,0]; group=bfsWild(b,r,c,best);
+            } else group=bfsWild(b,r,c,cell.t);
+            if(group.length>=3) return popGroup(b, group.map(([gr,gc])=>key(gr,gc)));
+            return [0,0];
+          }
+          function explosionCenter(b,r,c){
+            const x=cellX(r,c),y=cellY(r), out=[];
+            for(const k in b){ const [rr,cc]=k.split(',').map(Number);
+              const dx=cellX(rr,cc)-x,dy=cellY(rr)-y;
+              if(dx*dx+dy*dy<=BOMB_RAD*BOMB_RAD) out.push(k); }
+            return out;
+          }
+          function detonate(b,r,c){ delete b[key(r,c)]; return cascade(b,[[cellX(r,c),cellY(r)]],new Set()); }
+          function clearRow(b,r){ return cascade(b,[],new Set([r])); }
+          function snapSlots(b){
+            const slots={};
+            for(const k in b){ const [r,c]=k.split(',').map(Number);
+              for(const [nr,nc] of neighbors(r,c)){ if(b[key(nr,nc)]===undefined) slots[key(nr,nc)]=1; } }
+            for(let c=0;c<colsInRow(0);c++) if(b[key(0,c)]===undefined) slots[key(0,c)]=1;
+            return Object.keys(slots).map(k=>k.split(',').map(Number));
+          }
+          function evalNormal(b,r,c,color){
+            const bb={}; for(const k in b) bb[k]={t:b[k].t,hp:b[k].hp};
+            bb[key(r,c)]={t:color};
+            const [popped,dropped]=resolveShot(bb,r,c);
+            let pair=0;
+            if(popped===0){ for(const [nr,nc] of neighbors(r,c)){
+              const nb=bb[key(nr,nc)]; if(nb&&(nb.t===color||nb.t==='R')){ pair=1; break; } } }
+            return [popped,dropped,pair];
+          }
+          function bestMove(b){
+            const stones=hasStones(b); let bd=null;
+            for(const k in b){ const [r,c]=k.split(',').map(Number); const pts=explosionCenter(b,r,c);
+              if(!pts.length) continue; let v=0;
+              for(const kk of pts){ const t=b[kk].t; v+= t==='S'?30:t==='I'?3:t==='B'?2:1; }
+              if(bd===null||v>bd[0]) bd=[v,r,c]; }
+            let br=null;
+            for(let r=0;r<13;r++){ let n=0;
+              for(let c=0;c<colsInRow(r);c++){ const cell=b[key(r,c)]; if(cell&&cell.t!=='S') n++; }
+              if(n&&(br===null||n>br[0])) br=[n,r]; }
+            const cands=['R'].concat(present(b)); let bn=null;
+            for(const [r,c] of snapSlots(b)){
+              for(const col of cands){
+                const [popped,dropped,pair]=evalNormal(b,r,c,col);
+                const v=popped+dropped+0.5*pair;
+                if(bn===null||v>bn[0]) bn=[v,r,c,col]; } }
+            const moves=[];
+            if(bd&&bd[0]>0) moves.push(['det',bd[1],bd[2],null,bd[0]]);
+            if(br&&br[0]>=5) moves.push(['row',br[1],0,null,br[0]]);
+            if(bn&&bn[0]>0) moves.push(['norm',bn[1],bn[2],bn[3],bn[0]]);
+            if(!moves.length) return null;
+            moves.sort((a,b)=> b[4]-a[4] || ((a[0]==='norm'?0:1)-(b[0]==='norm'?0:1)));
+            return moves[0];
+          }
+          function bestMoveConstrained(b,avail){
+            const cands=['R'].concat(present(b)).filter(c=>avail.indexOf(c)!==-1); let best=null;
+            for(const [r,c] of snapSlots(b)){
+              for(const col of cands){
+                const [popped,dropped,pair]=evalNormal(b,r,c,col);
+                const v=popped+dropped+0.5*pair;
+                if(best===null||v>best[0]) best=[v,r,c,col]; } }
+            return best;
+          }
+          function playPerfect(cs, maxShots){
+            const b=cellsToMap(cs); let shots=0;
+            while(Object.keys(b).length>0){
+              const mv=bestMove(b); if(!mv) return null; const [kind,r,c,col]=mv;
+              shots++; if(shots>maxShots) return null;
+              if(kind==='det') detonate(b,r,c);
+              else if(kind==='row') clearRow(b,r);
+              else { b[key(r,c)]={t:col}; resolveShot(b,r,c); } }
+            return shots;
+          }
+          function playReal(cs, rate, swaps, maxShots){
+            const b=cellsToMap(cs); let cur, queue=[];
+            const rollNew=(avail)=>{
+              if(Math.random()<rate) return ['R','B','L'][(Math.random()*3)|0];
+              let pool=present(b);
+              if(pool.length&&hasStones(b)&&avail.indexOf('B')===-1) pool.push('B');
+              return pool.length?pool[(Math.random()*pool.length)|0]:0; };
+            cur=rollNew([cur]); queue=[rollNew([cur]),rollNew([cur]),rollNew([cur])];
+            let dry=0, sw=0, shots=0;
+            while(Object.keys(b).length>0){
+              if(shots>maxShots) return null;
+              const mv=bestMove(b); if(!mv) return null;
+              const [kind,r,c,col]=mv; let avail=[cur].concat(queue), chosen=null;
+              if(kind==='det'&&avail.indexOf('B')!==-1) chosen=['det',r,c,null];
+              else if(kind==='row'&&avail.indexOf('L')!==-1) chosen=['row',r,0,null];
+              else if(kind==='norm'&&avail.indexOf(col)!==-1) chosen=['norm',r,c,col];
+              else {
+                const target=kind==='det'?'B':kind==='row'?'L':col;
+                if(queue.indexOf(target)!==-1&&cur!==target&&sw<swaps){
+                  while(sw<swaps&&cur!==target){ const q=queue.shift(); queue.unshift(cur); cur=q; sw++; } }
+                avail=[cur].concat(queue);
+                if(kind==='det'&&avail.indexOf('B')!==-1) chosen=['det',r,c,null];
+                else if(kind==='row'&&avail.indexOf('L')!==-1) chosen=['row',r,0,null];
+                else if(kind==='norm'&&avail.indexOf(col)!==-1) chosen=['norm',r,c,col];
+                else {
+                  const alt=bestMoveConstrained(b,avail);
+                  if(alt&&alt[0]>0) chosen=['norm',alt[1],alt[2],alt[3]];
+                  else {
+                    const slots=snapSlots(b); if(!slots.length) return null;
+                    const cands=present(b).filter(c=>avail.indexOf(c)!==-1);
+                    let best2=null;
+                    for(const [r2,c2] of slots){ for(const col2 of cands){
+                      const pair=evalNormal(b,r2,c2,col2)[2]; const v=0.5*pair;
+                      if(best2===null||v>best2[0]) best2=[v,r2,c2,col2]; } }
+                    if(best2) chosen=['norm',best2[1],best2[2],best2[3]];
+                    else { const nz=avail.find(x=>typeof x==='number');
+                      chosen=['norm',slots[0][0],slots[0][1],nz===undefined?0:nz]; }
+                  }
+                }
+              }
+              const [k2,r2,c2,col2]=chosen; shots++;
+              if(k2==='det'){ detonate(b,r2,c2); dry=0; }
+              else if(k2==='row'){ clearRow(b,r2); dry=0; }
+              else { b[key(r2,c2)]={t:col2}; const popped=resolveShot(b,r2,c2)[0]; dry=popped===0?dry+1:0; }
+              const rescue=dry>=2; let nxt=queue.shift();
+              if(rescue){
+                if(hasStones(b)) nxt='B';
+                else { const d=dominant(b); if(d!==null) nxt=d; } }
+              cur=sanitize(b,nxt);
+              while(queue.length<3){ const nv=rollNew([cur].concat(queue)); queue.push(sanitize(b,nv)); }
+            }
+            return shots;
+            function sanitize(bb,t){
+              if(typeof t==='number'){ const pool=present(bb);
+                if(pool.length&&pool.indexOf(t)===-1){ const d=dominant(bb); return d!==null?d:pool[0]; }
+                if(!pool.length) return 0; }
+              return t;
+            }
+          }
+          return { playPerfect, playReal };
+        })();
+        """)
+        policy_ok = bool(evaluate(ws, "typeof window.__POLICY__.playPerfect === 'function'"))
+        check("policy_injected", policy_ok)
+
+        # 17a) 关卡结构：bomb>=stone、count<=74、限步/三星单调且三星≤限步-3
+        struct = evaluate(ws, """
+          (() => {
+            const Ls = LEVELS, out = {n: Ls.length, bad: []};
+            let mono_s = true, mono_p = true;
+            for (let i = 0; i < Ls.length; i++) {
+              const L = Ls[i];
+              if (L.bomb < L.stone) out.bad.push({level: i + 1, why: 'bomb<stone'});
+              if (L.count > 74) out.bad.push({level: i + 1, why: 'count>74'});
+              if (L.shots < 10 || L.par < 8 || L.par > L.shots - 3) out.bad.push({level: i + 1, why: 'budget_shape'});
+              if (i > 0) {
+                if (Ls[i].shots < Ls[i - 1].shots) mono_s = false;
+                if (Ls[i].par < Ls[i - 1].par) mono_p = false;
+              }
+            }
+            out.mono_shots = mono_s; out.mono_par = mono_p;
+            out.first = {shots: Ls[0].shots, par: Ls[0].par};
+            out.last = {shots: Ls[49].shots, par: Ls[49].par};
+            return out;
           })()
         """)
-        all_winnable = all(s["shots"] >= s["minShots"] for s in sim)
-        check("all_levels_winnable", all_winnable and len(sim) == 50,
-              {"n": len(sim), "first": sim[0], "last": sim[-1]})
+        check("levels_structural_v04",
+              struct["n"] == 50 and struct["mono_shots"] and struct["mono_par"] and not struct["bad"],
+              {"first": struct["first"], "last": struct["last"], "mono_shots": struct["mono_shots"],
+               "mono_par": struct["mono_par"], "bad": struct["bad"]})
+
+        # 17b) 完美队列通关：每关存在一条 ≤限步（且 ≤三星目标）的必胜策略
+        sim = evaluate(ws, """
+          (() => {
+            const T = window.__GARDEN_TEST__, P = window.__POLICY__, out = [];
+            for (let n = 1; n <= T.levelCount(); n++) {
+              T.loadLevel(n);
+              const cs = T.getCells();
+              const L = LEVELS[n - 1];
+              const used = P.playPerfect(cs, L.shots);
+              out.push({level: n, bubbles: cs.length, shots: L.shots, par: L.par, used});
+            }
+            return out;
+          })()
+        """)
+        all_clear = all(s["used"] is not None and s["used"] <= s["shots"] for s in sim)
+        all_par = all(s["used"] is not None and s["used"] <= s["par"] for s in sim)
+        check("perfect_play_clears_all_50", all_clear and len(sim) == 50,
+              {"n": len(sim), "max_used": max(s["used"] for s in sim),
+               "worst": max(sim, key=lambda s: s["used"] - s["shots"])})
+        check("perfect_play_within_par", all_par,
+              {"worst_par_gap": max(s["used"] - s["par"] for s in sim)})
+
+        # 17c) 真实随机队列 Monte Carlo：每关 15 局，全部 ≤限步（充分过关机会）
+        mc = evaluate(ws, """
+          (() => {
+            const T = window.__GARDEN_TEST__, P = window.__POLICY__, out = [];
+            for (let n = 1; n <= T.levelCount(); n++) {
+              T.loadLevel(n);
+              const cs = T.getCells();
+              const L = LEVELS[n - 1];
+              let worst = 0, fails = 0, runs = [];
+              for (let i = 0; i < 15; i++) {
+                const used = P.playReal(cs, L.rate, L.swaps, L.shots);
+                if (used === null) { fails++; runs.push(null); }
+                else { runs.push(used); worst = Math.max(worst, used); }
+              }
+              out.push({level: n, shots: L.shots, fails, worst, runs: runs.slice(0, 15)});
+            }
+            return out;
+          })()
+        """)
+        mc_fail = [m for m in mc if m["fails"] > 0]
+        check("real_queue_50x15_all_within_shots", not mc_fail and len(mc) == 50,
+              {"total_runs": 50 * 15, "failed_levels": [m["level"] for m in mc_fail],
+               "worst_usage": max(m["worst"] for m in mc),
+               "max_ratio": max(round(m["worst"] / m["shots"], 2) for m in mc)})
 
         # 17b) 连击系统：连续消除递增倍率并累计统计（真实结算路径）
         # 注意：场上保留 (0,7) 锚定泡 → 每发消除后仍有剩余，不触发胜利/连胜奖金，分数纯净
@@ -419,6 +690,55 @@ def main() -> int:
         ts = evaluate(ws, "window.__GARDEN_TEST__.totalStars()")
         check("total_stars", ts == 5, ts)
 
+        # 17i) 新手教程：第1关单色教学关，通关后 tutorialDone 置位
+        evaluate(ws, "window.__GARDEN_TEST__.resetTutorial()")
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(1)")
+        evaluate(ws, "window.__GARDEN_TEST__.startGame()")
+        t_done0 = evaluate(ws, "window.__GARDEN_TEST__.tutorialDone()")
+        lv1_colors = evaluate(ws, "window.__GARDEN_TEST__.levelDef(1).colors")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0)")
+        evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,3,0)")
+        t_done1 = evaluate(ws, "window.__GARDEN_TEST__.tutorialDone()")
+        check("tutorial_level1", t_done0 is False and lv1_colors == 1 and t_done1 is True,
+              {"done0": t_done0, "colors": lv1_colors, "done1": t_done1})
+
+        # 17j) 工坊合规校验：不合规关卡不能保存/试玩/进入
+        issues_empty = evaluate(ws, "window.__GARDEN_TEST__.validateCustom({shots:15,cells:[{r:0,c:0,t:0},{r:0,c:1,t:0},{r:0,c:2,t:0}]})")
+        issues_too_few = evaluate(ws, "window.__GARDEN_TEST__.validateCustom({shots:15,cells:[{r:0,c:0,t:0},{r:0,c:1,t:0}]})")
+        issues_stone = evaluate(ws, "window.__GARDEN_TEST__.validateCustom({shots:15,cells:[{r:0,c:0,t:0},{r:0,c:1,t:0},{r:0,c:2,t:0},{r:1,c:0,t:'S'}]})")
+        issues_shots = evaluate(ws, "window.__GARDEN_TEST__.validateCustom({shots:1,cells:[{r:0,c:0,t:0},{r:0,c:1,t:0},{r:0,c:2,t:0},{r:0,c:3,t:1},{r:0,c:4,t:1},{r:0,c:5,t:1}]})")
+        check("workshop_validation", len(issues_empty) == 0 and len(issues_too_few) > 0
+              and len(issues_stone) > 0 and len(issues_shots) > 0,
+              {"empty": issues_empty, "tooFew": issues_too_few, "stone": issues_stone, "shots": issues_shots})
+        # 保存拦截：画 2 个泡泡 → 保存被拒；补到 3 个同色 → 成功
+        evaluate(ws, "window.__GARDEN_TEST__.edClear();window.__GARDEN_TEST__.edShots(15)")
+        evaluate(ws, "window.__GARDEN_TEST__.edSet(0,0,0);window.__GARDEN_TEST__.edSet(0,1,0)")
+        save_bad = evaluate(ws, "window.__GARDEN_TEST__.edSave()")
+        evaluate(ws, "window.__GARDEN_TEST__.edSet(0,2,0)")
+        save_ok = evaluate(ws, "window.__GARDEN_TEST__.edSave()")
+        cnt = evaluate(ws, "window.__GARDEN_TEST__.customCount()")
+        evaluate(ws, "window.__GARDEN_TEST__.deleteCustom(0)")
+        check("workshop_save_blocked", save_bad is False and save_ok is True and cnt == 1,
+              {"bad": save_bad, "ok": save_ok, "cnt": cnt})
+
+        # 17k) 新属性泡泡首次登场介绍弹窗（只弹一次，持久化记录）
+        evaluate(ws, "window.__GARDEN_TEST__.resetSpecials()")
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(7)")   # 第7关起有冰块/彩虹/闪电
+        seen7 = evaluate(ws, "window.__GARDEN_TEST__.seenSpecials()")
+        pc7 = evaluate(ws, "window.__GARDEN_TEST__.popupCount()")
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(7)")   # 再次进入 → 不再弹介绍
+        pc7b = evaluate(ws, "window.__GARDEN_TEST__.popupCount()")
+        check("special_intro_once", len(seen7) >= 1 and pc7 >= 1 and pc7b == 0,
+              {"seen": seen7, "pc": pc7, "pcAgain": pc7b})
+        evaluate(ws, "window.__GARDEN_TEST__.resetSpecials()")
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(12)")  # 石头/炸弹登场
+        seen12 = evaluate(ws, "window.__GARDEN_TEST__.seenSpecials()")
+        check("special_intro_stone_bomb", 'S' in seen12 and 'B' in seen12, seen12)
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
+        evaluate(ws, "window.__GARDEN_TEST__.resetSpecials()")
+
         # 18) 截图：菜单（含特殊泡泡图例 + 工坊入口）
         evaluate(ws, "location.reload()")
         time.sleep(1.2)
@@ -430,6 +750,16 @@ def main() -> int:
         screenshot(ws, shots / "menu.png")
         report["screenshots"].append("screenshots/menu.png")
 
+        # 18b) 截图：官方关卡开场情报卡（展示新限步/三星目标）
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(30)")
+        time.sleep(0.9)
+        screenshot(ws, shots / "level30_intro.png")
+        report["screenshots"].append("screenshots/level30_intro.png")
+        evaluate(ws, "window.__GARDEN_TEST__.startGame()")
+        time.sleep(0.6)
+        screenshot(ws, shots / "level30_game.png")
+        report["screenshots"].append("screenshots/level30_game.png")
+
         # 14) 截图：编辑器
         evaluate(ws, "window.__GARDEN_TEST__.openEditor()")
         evaluate(ws, "for(let c=0;c<8;c++)window.__GARDEN_TEST__.edSet(0,c,c%3);window.__GARDEN_TEST__.edSet(1,0,'R');window.__GARDEN_TEST__.edSet(1,1,'B');window.__GARDEN_TEST__.edSet(1,2,'L');window.__GARDEN_TEST__.edSet(1,3,'I');window.__GARDEN_TEST__.edSet(1,4,'S')")
@@ -437,8 +767,10 @@ def main() -> int:
         screenshot(ws, shots / "editor.png")
         report["screenshots"].append("screenshots/editor.png")
 
-        # 15) 截图：特殊关卡游戏画面（造一个含全部特殊泡泡的局）
+        # 15) 截图：特殊关卡游戏画面（造一个含全部特殊泡泡的局；先清空介绍弹窗）
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
         evaluate(ws, "window.__GARDEN_TEST__.loadCustomDef({name:'演示关',shots:20,cells:[{r:0,c:0,t:0},{r:0,c:1,t:0},{r:0,c:2,t:1},{r:0,c:3,t:1},{r:0,c:4,t:2},{r:0,c:5,t:2},{r:0,c:6,t:3},{r:0,c:7,t:3},{r:1,c:0,t:'R'},{r:1,c:1,t:'B'},{r:1,c:2,t:'L'},{r:1,c:3,t:'I'},{r:1,c:4,t:'S'},{r:1,c:5,t:4},{r:1,c:6,t:4},{r:2,c:0,t:5},{r:2,c:1,t:5},{r:2,c:2,t:0}]})")
+        evaluate(ws, "while(window.__GARDEN_TEST__.closePopup()){}")
         evaluate(ws, "window.__GARDEN_TEST__.startGame()")
         time.sleep(0.8)
         screenshot(ws, shots / "specials.png")

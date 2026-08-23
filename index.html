@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>泡泡花园 · Bubble Garden v0.3</title>
+<title>泡泡花园 · Bubble Garden v0.4</title>
 <style>
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);}
   #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
@@ -20,11 +20,15 @@
 <script>
 "use strict";
 /* ============================================================
-   泡泡花园 Bubble Garden v0.3
+   泡泡花园 Bubble Garden v0.4
    泡泡射击 + 5 章节 · 50 官方关卡 + 创意工坊（自制关卡）
    上瘾系统：连胜加成 / 最佳纪录 / 章节通关奖励 / 总星数进度
+   v0.4：新手教程关 / 新泡泡介绍弹窗 / 工坊合规校验 / 难度下调
    特殊泡泡：彩虹(万能) / 炸弹(范围爆破) / 闪电(整行清除) /
              冰块(两次命中) / 石头(只能炸毁)
+   v0.4 关卡平衡：限步/三星目标改为「实测可通关 + 充分余量」，
+   石头与炸弹同步登场（bomb>=stone），棋盘上限 74（避免满盘无法落子），
+   队列增加石头保底炸弹（有石头必给炸弹）。
    验证钩子：window.__GARDEN_TEST__
    ============================================================ */
 
@@ -32,7 +36,7 @@ const W = 420, H = 640;
 const R = 25;
 const COLS = 8;
 const ROWH = R * Math.sqrt(3);
-const BOARD_TOP = 80;
+const BOARD_TOP = 88;   // HUD 最低元素底边(80) + 8px 安全区，防止顶行泡泡压住 HUD
 const ED_TOP = 116;
 const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
@@ -55,6 +59,14 @@ const SPECIAL_INFO = {
   I:{ name:'冰块', desc:'命中两次' },
   S:{ name:'石头', desc:'只能炸毁' },
 };
+/* 新属性泡泡首次登场介绍文案（触发一次后记录 seenSpecials，不再重复） */
+const SPECIAL_INTRO = {
+  R:{ icon:'🌈', title:'新泡泡登场：彩虹', lines:['万能配色 · 落到哪里都能融入相邻同色','帮你补齐差一个的消除组合'] },
+  B:{ icon:'💣', title:'新泡泡登场：炸弹', lines:['落地立即范围爆破，清空周边一片','石头也能炸碎！'] },
+  L:{ icon:'⚡', title:'新泡泡登场：闪电', lines:['清空整行泡泡，扫清障碍','石头免疫闪电'] },
+  I:{ icon:'🧊', title:'新泡泡登场：冰块', lines:['需要命中两次才消除（先破冰后碎裂）','相邻同色消除也会震碎冰块一层'] },
+  S:{ icon:'🪨', title:'新泡泡登场：石头', lines:['无法被同色消除','只能用炸弹炸毁，记得留炸弹在手'] },
+};
 
 /* ---------- 5 大章节 · 50 关：难度曲线平滑递增 ---------- */
 const CHAPTERS = [
@@ -64,30 +76,30 @@ const CHAPTERS = [
   { name:'冬之霜', icon:'❄️', desc:'六色挑战 · 步步为营' },
   { name:'星之冠', icon:'👑', desc:'大师之路 · 极限限步' },
 ];
+/* 限步/三星目标表：由「实测可通关」仿真生成（50关 × 80次真实队列模拟）
+   限步 = ceil(P90 × 1.3) + 3（前 90% 真实对局发数再留 30%+3 余量），
+   三星 = ceil(P50 × 1.15) + 1（中等偏优发挥即可三星），均单调不减、三星 ≤ 限步-3 */
+const SHOTS = [11,14,16,16,16,16,16,16,19,19,19,19,19,19,19,20,20,20,20,20,22,24,29,29,29,29,29,29,35,35,37,37,37,37,37,37,37,37,37,37,37,37,37,40,40,40,49,49,49,49];
+const PARS  = [8,11,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,14,14,18,18,18,18,18,22,22,23,23,23,23,23,23,23,23,23,23,24,24,24,24,24,27,28,28,28,28];
 const LEVELS = (()=>{
   const arr=[];
   let prevCount=0;
   for(let n=1;n<=50;n++){
     const t=(n-1)/49;
-    // 泡泡数加速曲线：6→75（前期每关 +1 温和上手，后期每关 +2~3 陡增压迫感）
+    // 泡泡数加速曲线：6→74（前期每关 +1 温和上手，后期每关 +2~3 陡增压迫感）
     let count = 6 + Math.round(69*Math.pow(t,1.7));
-    count = Math.min(75, Math.max(count, prevCount+1));   // 严格递增且不超过 10 行容量
+    count = Math.min(74, Math.max(count, prevCount+1));   // 上限 74：10 行容量 75，留 1 空位保证首发射得出
     prevCount = count;
-    const colors= n<=8?3 : n<=18?4 : n<=30?5 : 6;
+    const colors= n===1?1 : n<=8?3 : n<=18?4 : n<=30?5 : 6;   // 第1关教学：单色必消
     const ice   = n<7 ?0 : Math.min(4, 1+Math.floor((n-7)/8));
     const stone = n<12?0 : Math.min(3, 1+Math.floor((n-12)/12));
-    const bomb  = n<16?0 : Math.min(3, 1+Math.floor((n-16)/13));
+    const bomb  = n<12?0 : Math.min(3, 1+Math.floor((n-12)/12));   // 与石头同步登场，保证每关炸弹≥石头
     const rate  = n<6 ?0 : Math.min(.12, .04+t*.08);
     const swaps = n<=2?1 : n<=10?2 : n<=22?3 : n<=38?4 : 5;
-    const specials=ice+stone+bomb;
-    const normals=count-specials;
-    const minShots=Math.ceil(normals/3)+Math.ceil(specials/2);
-    const shots=minShots+4;                              // 每关固定留 4 发余量，保证可通关
-    const par=minShots+2;                               // 三星目标（随 minShots 单调不减）
     let maxRows=0, cap=0;                                // 行数刚好容纳 count
     while(cap<count){ cap += (maxRows%2===0?8:7); maxRows++; }
     maxRows=Math.max(3,maxRows);
-    arr.push({count,maxRows,colors,shots,par,rate,ice,stone,bomb,swaps});
+    arr.push({count,maxRows,colors,shots:SHOTS[n-1],par:PARS[n-1],rate,ice,stone,bomb,swaps});
   }
   return arr;
 })();
@@ -122,6 +134,8 @@ const state = {
   streak:0, bestStreak:0,
   menuPage:0,
   popups:[],
+  seenSpecials:{},     // 已介绍过的特殊泡泡类型（持久化）
+  tutorialDone:false,  // 第1关新手教程是否已完成（持久化）
   lastBonus:0, chapterClear:-1, isNewBest:false,
   reduceMotion:false,
   shakeT:0,
@@ -143,6 +157,14 @@ function cellX(r,c){ return BOARD_LEFT + R + c*2*R + (r%2 ? R : 0); }
 function cellY(r,top){ return (top==null?BOARD_TOP:top) + R + r*ROWH; }
 function toast(m){ state.toast=m; state.toastT=2.4; }
 function pushPopup(icon,title,lines){ state.popups.push({icon,title,lines}); }
+/* 新属性泡泡首次登场：弹出介绍并记录，避免重复打扰 */
+function maybeIntro(t){
+  if(state.seenSpecials[t]) return;
+  state.seenSpecials[t]=true;
+  const info=SPECIAL_INTRO[t];
+  if(info) pushPopup(info.icon, info.title, info.lines);
+  save();
+}
 function neighbors(r,c){
   const even = r%2===0;
   const list = even
@@ -193,6 +215,11 @@ function buildLevel(n){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
+  // 首次登场的新属性泡泡 → 屏幕弹介绍（已看过的类型不再打扰）
+  if(L.ice) maybeIntro('I');
+  if(L.stone) maybeIntro('S');
+  if(L.bomb) maybeIntro('B');
+  if(L.rate>0){ maybeIntro('R'); maybeIntro('L'); }
   initQueue();
 }
 function buildCustom(def){
@@ -201,6 +228,13 @@ function buildCustom(def){
     if(it.t===undefined || it.t===null) continue;
     if(it.t==='I') setCellRaw(it.r,it.c,{t:'I',hp:it.hp||2});
     else setCellRaw(it.r,it.c,{t:it.t});
+  }
+  // 自制关卡出现的新属性泡泡同样弹介绍
+  const seen=new Set();
+  for(const it of def.cells){
+    if(it.t!=='R' && it.t!=='B' && it.t!=='L' && it.t!=='I' && it.t!=='S') continue;
+    if(seen.has(it.t)) continue;
+    seen.add(it.t); maybeIntro(it.t);
   }
   state.specialRate=0.10;
   state.shotsLeft=def.shots;
@@ -223,6 +257,10 @@ function dominantColor(){
   for(const t in cnt) if(cnt[t]>bn){ bn=cnt[t]; best=+t; }
   return best;
 }
+function hasStones(){
+  for(const k of Object.keys(state.cells)){ if(state.cells[k].t==='S') return true; }
+  return false;
+}
 /* ---------- 智能发泡：只发场上仍存在的颜色；连歪两次发保底 ---------- */
 function rollNew(){
   if(Math.random() < (state.specialRate||0)){
@@ -230,6 +268,8 @@ function rollNew(){
     return s[(Math.random()*3)|0];
   }
   const pool=presentNormalColors();
+  // 石头存在且当前没有炸弹在手 → 把炸弹加入候选池，保证石头永远炸得掉
+  if(pool.length && hasStones() && state.cur!=='B' && !state.queue.includes('B')) pool.push('B');
   return (pool.length?pool:[0])[(Math.random()*(pool.length?pool.length:1))|0];
 }
 function sanitize(t){
@@ -249,12 +289,15 @@ function initQueue(){
   state.dryStreak=0;
 }
 function advanceQueue(){
-  // 保底：连续两发未消除 → 下一发必发场上占多数的颜色（必有成组潜力）
+  // 保底：连续两发未消除 → 有石头发炸弹（石头只能炸毁），否则发场上占多数的颜色
   const rescue = state.dryStreak>=2;
   let nxt = state.queue.shift();
   if(rescue){
-    const d=dominantColor();
-    if(d!==null) nxt=d;
+    if(hasStones()){ nxt='B'; }
+    else {
+      const d=dominantColor();
+      if(d!==null) nxt=d;
+    }
   }
   state.cur=sanitize(nxt);
   while(state.queue.length<3) state.queue.push(sanitize(rollNew()));
@@ -445,6 +488,9 @@ function checkEnd(){
       if(state.streak>=5 && state.streak%5===0) pushPopup('🔥','连胜 ×'+state.streak, ['连赢加成持续累计中','历史最高连胜 '+state.bestStreak]);
     }
     state.screen='result'; sfxWin(); save();
+    if(state.mode==='official' && state.level===1 && !state.tutorialDone){
+      state.tutorialDone=true; save();
+    }
   } else if(state.shotsLeft<=0 && !state.flying){
     state.won=false; state.screen='result'; state.resultStart=performance.now()/1000; state.starsShown=0;
     if(state.mode==='official') state.streak=0;
@@ -537,6 +583,7 @@ function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({
   unlocked:state.unlocked, starMap:state.starMap, bestMap:state.bestMap,
   streak:state.streak, bestStreak:state.bestStreak, menuPage:state.menuPage, chapterClear:state.chapterClear,
   reduceMotion:state.reduceMotion, muted:state.muted, customLevels:state.customLevels,
+  seenSpecials:state.seenSpecials, tutorialDone:state.tutorialDone,
 })); }catch(e){} }
 function load(){ try{
   const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'{}');
@@ -546,6 +593,8 @@ function load(){ try{
   state.chapterClear=(d.chapterClear===undefined||d.chapterClear===null)?-1:d.chapterClear;
   state.reduceMotion=!!d.reduceMotion; state.muted=!!d.muted;
   state.customLevels=Array.isArray(d.customLevels)?d.customLevels.slice(0,12):[];
+  state.seenSpecials=d.seenSpecials||{};
+  state.tutorialDone=!!d.tutorialDone;
 }catch(e){} }
 
 /* ---------------- 创意工坊 ---------------- */
@@ -573,9 +622,35 @@ function editorDef(){
   });
   return { shots:state.editor.shots, cells };
 }
+/* 工坊关卡合规校验：返回问题数组（空数组 = 合规可玩）
+   规则：①至少3个可消除的普通泡泡 ②步数≥理论最少发数 ③有石头必须配炸弹 ④颜色数不能超过可及容量 */
+function validateCustomDef(def){
+  const issues=[];
+  const cells=(def.cells||[]).filter(it=>it.t!==undefined && it.t!==null);
+  const normals=cells.filter(it=>typeof it.t==='number');
+  const specials=cells.filter(it=>typeof it.t!=='number');
+  const tSet=new Set(normals.map(it=>it.t));
+  if(cells.length<3) issues.push('至少需要 3 个泡泡');
+  else if(!normals.length) issues.push('至少需要 3 个普通颜色泡泡才能消除');
+  else if(tSet.size>6) issues.push('普通颜色最多 6 种');
+  if(tSet.size===1 && normals.length<3) issues.push('单色泡泡不足 3 个无法消除');
+  if(tSet.size>=2 && normals.length<6) issues.push('多色布局至少需要 6 个普通泡泡');
+  if(!specials.length && normals.length<3) issues.push('没有可消除的三连组合');
+  // 步数下限：理论最少发数
+  const minShots=Math.ceil(normals.length/3)+Math.ceil(specials.length/2);
+  if(def.shots<minShots) issues.push('步数 '+def.shots+' 不足（理论最少 '+minShots+' 步）');
+  // 石头必须有炸弹可炸
+  const hasStone=specials.some(it=>it.t==='S');
+  const hasBomb=specials.some(it=>it.t==='B');
+  if(hasStone && !hasBomb) issues.push('有石头但没有炸弹，石头无法清除');
+  if(hasBomb && specials.every(it=>it.t!=='S') && !hasStone && specials.length>0 && normals.length<3) issues.push('炸弹无法独立通关，需要普通泡泡');
+  return issues;
+}
 function saveCustom(){
   const def=editorDef();
   if(!def.cells.length){ toast('先画一些泡泡再保存吧'); return false; }
+  const issues=validateCustomDef(def);
+  if(issues.length){ toast('⚠ 关卡不合规：'+issues[0]); return false; }
   if(state.customLevels.length>=12){ toast('工坊最多保存 12 个关卡'); return false; }
   state.customLevels.push({ name:'我的关卡 '+(state.customLevels.length+1), shots:def.shots, cells:def.cells });
   save();
@@ -585,6 +660,8 @@ function saveCustom(){
 function startPlaytest(){
   const def=editorDef();
   if(!def.cells.length){ toast('先画一些泡泡再试玩'); return; }
+  const issues=validateCustomDef(def);
+  if(issues.length){ toast('⚠ 关卡不合规：'+issues[0]); return; }
   state.mode='test'; state.customDef=def;
   buildCustom(def);
   state.screen='game';
@@ -675,8 +752,11 @@ function handleDown(p){
     const i=customRowHit(p);
     if(i>=0){
       if(p.x>W-64){ state.customLevels.splice(i,1); save(); toast('已删除'); return; }
-      state.mode='custom'; state.customIndex=i; state.customDef=state.customLevels[i];
-      buildCustom(state.customLevels[i]); state.screen='game';
+      const lv=state.customLevels[i];
+      const issues=validateCustomDef(lv);
+      if(issues.length){ toast('⚠ 该关卡不合规：'+issues[0]); return; }
+      state.mode='custom'; state.customIndex=i; state.customDef=lv;
+      buildCustom(lv); state.screen='game';
     }
     return;
   }
@@ -866,6 +946,31 @@ function drawBG(){
   }
   ctx.globalAlpha=1;
 }
+/* 第1关新手教程：游戏内逐步引导（瞄准→发射→消除→通关） */
+function drawTutorial(){
+  if(state.mode!=='official' || state.level!==1 || state.tutorialDone || state.screen!=='game' || !state.ready) return;
+  let msg='', arrow='';
+  if(state.totalPopped===0 && !state.aim.valid){
+    msg='按住屏幕拖动，瞄准虚线方向'; arrow='🖐️';
+  } else if(state.totalPopped===0 && state.aim.valid && !state.flying){
+    msg='松开发射！让泡泡飞向同色泡泡'; arrow='🚀';
+  } else if(state.totalPopped>0 && !state.won){
+    msg='干得漂亮！继续清空所有泡泡'; arrow='🎉';
+  } else if(state.won){
+    msg='恭喜过关！'; arrow='🏆';
+  }
+  if(!msg) return;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  // 引导条（HUD 下方，避免遮挡发射器）
+  const y=108;
+  ctx.fillStyle='rgba(63,143,119,.92)'; roundRect(W/2-170,y,340,34,17); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(arrow+' '+msg,W/2,y+17);
+  // 呼吸光效小箭头指向发射器
+  const pulse=.5+Math.sin(performance.now()/300)*.3;
+  ctx.fillStyle='rgba(232,184,74,'+pulse+')'; ctx.font='20px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('▼',SX,SY-52);
+}
 function drawHUD(){
   ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
   ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -981,8 +1086,10 @@ function drawGame(){
   drawShooter();
   ctx.restore();
   drawHUD();
+  drawTutorial();
   if(!state.ready) drawIntroOverlay();
   drawToast();
+  drawPopups();
 }
 /* 关卡开场确认层：防止误触，展示关卡情报 */
 function drawIntroOverlay(){
@@ -991,7 +1098,12 @@ function drawIntroOverlay(){
   const title = state.mode==='official' ? CHAPTERS[Math.floor((state.level-1)/10)].icon+' 第 '+state.level+' 关 · '+CHAPTERS[Math.floor((state.level-1)/10)].name
     : state.mode==='test' ? '试玩关卡' : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
   ctx.fillStyle='#3f8f77'; ctx.font='bold 26px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('🫧 '+title,W/2,130);
+  const isTutorial = state.mode==='official' && state.level===1 && !state.tutorialDone;
+  ctx.fillText('🫧 '+title,W/2,isTutorial?118:130);
+  if(isTutorial){
+    ctx.fillStyle='#e8b84a'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('🎓 新手教程 · 单色教学关',W/2,146);
+  }
   // 关卡情报卡
   const card={x:40,y:180,w:W-80,h:210};
   ctx.fillStyle='rgba(255,255,255,.95)'; roundRect(card.x,card.y,card.w,card.h,22); ctx.fill();
@@ -1004,6 +1116,13 @@ function drawIntroOverlay(){
   ];
   if(state.mode==='official') info.push(['⭐ 三星目标', '≤ '+L.par+' 步完成']);
   else info.push(['⭐ 三星目标', '≤ '+Math.max(6,Math.round((state.mode==='custom'?state.customDef.shots:state.shotsLeft)*0.7))+' 步完成']);
+  if(isTutorial){
+    info.length=0;
+    info.push(['🎯 怎么玩', '按住屏幕拖动 → 松开发射']);
+    info.push(['🫧 消除规则', '3 个以上同色相连自动消除']);
+    info.push(['🏆 过关条件', '清空场上所有泡泡']);
+    info.push(['⭐ 三星目标', '≤ '+L.par+' 步完成']);
+  }
   ctx.font='15px "Segoe UI",system-ui,sans-serif';
   for(let i=0;i<info.length;i++){
     ctx.fillStyle='#7fb8a4'; ctx.textAlign='left';
@@ -1131,15 +1250,19 @@ function drawCustom(){
   }
   for(let i=0;i<state.customLevels.length;i++){
     const lv=state.customLevels[i];
+    const issues=validateCustomDef(lv);
+    const bad=issues.length>0;
     const y=110+i*58;
-    ctx.fillStyle='rgba(255,255,255,.9)'; roundRect(16,y,W-32,50,14); ctx.fill();
-    ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; roundRect(16,y,W-32,50,14); ctx.stroke();
+    ctx.fillStyle= bad?'rgba(255,235,235,.95)':'rgba(255,255,255,.9)';
+    roundRect(16,y,W-32,50,14); ctx.fill();
+    ctx.strokeStyle= bad?'#e5718f':'#9fd0bc'; ctx.lineWidth=bad?2.5:2;
+    roundRect(16,y,W-32,50,14); ctx.stroke();
     ctx.fillStyle='#3f8f77'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='left';
-    ctx.fillText(lv.name,32,y+18);
-    ctx.fillStyle='#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText(lv.cells.length+' 个泡泡 · 限 '+lv.shots+' 步',32,y+37);
-    ctx.fillStyle='#4caf93'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center';
-    ctx.fillText('▶',W-96,y+26);
+    ctx.fillText((bad?'⚠ ':'')+lv.name,32,y+18);
+    ctx.fillStyle= bad?'#e5718f':'#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText((bad?issues[0]+' · ':'')+lv.cells.length+' 个泡泡 · 限 '+lv.shots+' 步',32,y+37);
+    ctx.fillStyle= bad?'#e5718f':'#4caf93'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center';
+    ctx.fillText(bad?'⚠':'▶',W-96,y+26);
     ctx.fillStyle='#e5718f'; roundRect(W-64,y+10,36,30,12); ctx.fill();
     ctx.fillStyle='#fff'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif';
     ctx.fillText('✕',W-46,y+26);
@@ -1337,7 +1460,7 @@ function frame(now){
 
 /* ---------------- 验证钩子 ---------------- */
 window.__GARDEN_TEST__ = {
-  version:'0.3',
+  version:'0.4',
   loadLevel(n){ state.mode='official'; state.level=n; buildLevel(n); state.screen='game'; },
   loadCustomDef(def){ state.mode='custom'; state.customDef=def; buildCustom(def); state.screen='game'; },
   state(){ return { screen:state.screen, mode:state.mode, level:state.level, shotsLeft:state.shotsLeft, score:state.score, bubbles:Object.keys(state.cells).length, won:state.won, stars:state.stars }; },
@@ -1368,6 +1491,7 @@ window.__GARDEN_TEST__ = {
     return true;
   },
   levelSwaps(n){ return LEVELS[n-1].swaps; },
+  levelDef(n){ const L=LEVELS[n-1]; return {count:L.count,colors:L.colors,shots:L.shots,par:L.par,ice:L.ice,stone:L.stone,bomb:L.bomb,rate:L.rate,swaps:L.swaps}; },
   levelCount(){ return LEVELS.length; },
   levelShots(n){ return LEVELS[n-1].shots; },
   levelPar(n){ return LEVELS[n-1].par; },
@@ -1382,6 +1506,11 @@ window.__GARDEN_TEST__ = {
   popupCount(){ return state.popups.length; },
   closePopup(){ if(state.popups.length){ state.popups.shift(); return true; } return false; },
   resetProgress(){ state.starMap={}; state.bestMap={}; state.streak=0; state.bestStreak=0; state.chapterClear=-1; state.popups=[]; state.unlocked=1; state.menuPage=0; },
+  validateCustom(def){ return validateCustomDef(def); },
+  seenSpecials(){ return Object.keys(state.seenSpecials); },
+  resetSpecials(){ state.seenSpecials={}; },
+  tutorialDone(){ return state.tutorialDone; },
+  resetTutorial(){ state.tutorialDone=false; },
   setStars(n,s){ state.starMap[n]=s; },
   setShots(n){ state.shotsLeft=n; },
   bestOf(n){ return state.bestMap[n]||0; },
