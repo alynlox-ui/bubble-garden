@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>泡泡花园 · Bubble Garden v0.3</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  canvas{display:block;touch-action:none;border-radius:20px;box-shadow:0 18px 50px rgba(120,180,160,.30);}
+  #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+        font-family:"Segoe UI",system-ui,sans-serif;color:#5aa88f;}
+  #boot h1{font-size:34px;margin:0 0 8px;letter-spacing:6px;color:#4caf93;}
+  #boot p{margin:0;opacity:.65;font-size:14px;letter-spacing:2px;}
+</style>
+</head>
+<body>
+<div id="boot"><h1>🫧 泡泡花园</h1><p>正在吹泡泡…</p></div>
+<div id="stage"><canvas id="game"></canvas></div>
+<script>
+"use strict";
+/* ============================================================
+   泡泡花园 Bubble Garden v0.3
+   泡泡射击 + 5 章节 · 50 官方关卡 + 创意工坊（自制关卡）
+   上瘾系统：连胜加成 / 最佳纪录 / 章节通关奖励 / 总星数进度
+   特殊泡泡：彩虹(万能) / 炸弹(范围爆破) / 闪电(整行清除) /
+             冰块(两次命中) / 石头(只能炸毁)
+   验证钩子：window.__GARDEN_TEST__
+   ============================================================ */
+
+const W = 420, H = 640;
+const R = 25;
+const COLS = 8;
+const ROWH = R * Math.sqrt(3);
+const BOARD_TOP = 80;
+const ED_TOP = 116;
+const ED_ROWS = 9;
+const BOARD_LEFT = (W - COLS * 2 * R) / 2;
+const SX = W / 2, SY = H - 84;
+const SPEED = 980;
+const BOMB_RAD = 2.6 * R;
+
+const PALETTE = [
+  { main:'#ff9eb5', light:'#ffd3de', dark:'#e5718f' },
+  { main:'#7fd8b0', light:'#c8f2de', dark:'#4fb98a' },
+  { main:'#8cc9f0', light:'#cfe8fa', dark:'#5fa8dc' },
+  { main:'#ffd97a', light:'#ffedbd', dark:'#e8b84a' },
+  { main:'#b9a5f0', light:'#e0d6fa', dark:'#9478d8' },
+  { main:'#ffb38a', light:'#ffdcc8', dark:'#e88a5a' },
+];
+const SPECIAL_INFO = {
+  R:{ name:'彩虹', desc:'万能配色' },
+  B:{ name:'炸弹', desc:'范围爆破' },
+  L:{ name:'闪电', desc:'整行清除' },
+  I:{ name:'冰块', desc:'命中两次' },
+  S:{ name:'石头', desc:'只能炸毁' },
+};
+
+/* ---------- 5 大章节 · 50 关：难度曲线平滑递增 ---------- */
+const CHAPTERS = [
+  { name:'春之芽', icon:'🌱', desc:'新手花园 · 轻松上手' },
+  { name:'夏之花', icon:'🌸', desc:'冰块登场 · 色彩渐丰' },
+  { name:'秋之实', icon:'🍂', desc:'石头炸弹 · 连锁反应' },
+  { name:'冬之霜', icon:'❄️', desc:'六色挑战 · 步步为营' },
+  { name:'星之冠', icon:'👑', desc:'大师之路 · 极限限步' },
+];
+const LEVELS = (()=>{
+  const arr=[];
+  let prevCount=0;
+  for(let n=1;n<=50;n++){
+    const t=(n-1)/49;
+    // 泡泡数加速曲线：6→75（前期每关 +1 温和上手，后期每关 +2~3 陡增压迫感）
+    let count = 6 + Math.round(69*Math.pow(t,1.7));
+    count = Math.min(75, Math.max(count, prevCount+1));   // 严格递增且不超过 10 行容量
+    prevCount = count;
+    const colors= n<=8?3 : n<=18?4 : n<=30?5 : 6;
+    const ice   = n<7 ?0 : Math.min(4, 1+Math.floor((n-7)/8));
+    const stone = n<12?0 : Math.min(3, 1+Math.floor((n-12)/12));
+    const bomb  = n<16?0 : Math.min(3, 1+Math.floor((n-16)/13));
+    const rate  = n<6 ?0 : Math.min(.12, .04+t*.08);
+    const swaps = n<=2?1 : n<=10?2 : n<=22?3 : n<=38?4 : 5;
+    const specials=ice+stone+bomb;
+    const normals=count-specials;
+    const minShots=Math.ceil(normals/3)+Math.ceil(specials/2);
+    const shots=minShots+4;                              // 每关固定留 4 发余量，保证可通关
+    const par=minShots+2;                               // 三星目标（随 minShots 单调不减）
+    let maxRows=0, cap=0;                                // 行数刚好容纳 count
+    while(cap<count){ cap += (maxRows%2===0?8:7); maxRows++; }
+    maxRows=Math.max(3,maxRows);
+    arr.push({count,maxRows,colors,shots,par,rate,ice,stone,bomb,swaps});
+  }
+  return arr;
+})();
+const SAVE_KEY = 'bubble-garden-demo-v2';
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const state = {
+  screen:'menu',     // menu | custom | editor | game | result
+  mode:'official',   // official | custom | test
+  level:1,
+  customIndex:-1,
+  customDef:null,
+  cells:{},
+  shotsLeft:0,
+  specialRate:0,
+  score:0,
+  cur:0, queue:[], dryStreak:0, swapT:0, swapsLeft:0,
+  flying:null,
+  aim:{ x:SX, y:SY-100, valid:false },
+  particles:[],
+  falling:[],
+  flashes:[],
+  won:false, stars:0,
+  ready:false, introT:0, introConsumed:false,
+  combo:0, maxCombo:0, totalPopped:0,
+  muted:false, resultStart:0, starsShown:0, confetti:[],
+  unlocked:1,
+  starMap:{},
+  bestMap:{},
+  streak:0, bestStreak:0,
+  menuPage:0,
+  popups:[],
+  lastBonus:0, chapterClear:-1, isNewBest:false,
+  reduceMotion:false,
+  shakeT:0,
+  toast:null, toastT:0,
+  customLevels:[],
+  editor:{ cells:{}, shots:12, brush:0, dragging:false },
+};
+let audioCtx=null, saveAcc=0;
+
+/* ---------------- 工具 ---------------- */
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function key(r,c){ return r+','+c; }
+function parseKey(k){ return k.split(',').map(Number); }
+function getCell(r,c){ return state.cells[key(r,c)]; }
+function setCellRaw(r,c,cell){ state.cells[key(r,c)]=cell; }
+function delCell(r,c){ delete state.cells[key(r,c)]; }
+function colsInRow(r){ return r%2===0 ? COLS : COLS-1; }
+function cellX(r,c){ return BOARD_LEFT + R + c*2*R + (r%2 ? R : 0); }
+function cellY(r,top){ return (top==null?BOARD_TOP:top) + R + r*ROWH; }
+function toast(m){ state.toast=m; state.toastT=2.4; }
+function pushPopup(icon,title,lines){ state.popups.push({icon,title,lines}); }
+function neighbors(r,c){
+  const even = r%2===0;
+  const list = even
+    ? [[r,c-1],[r,c+1],[r-1,c-1],[r-1,c],[r+1,c-1],[r+1,c]]
+    : [[r,c-1],[r,c+1],[r-1,c],[r-1,c+1],[r+1,c],[r+1,c+1]];
+  return list.filter(([rr,cc])=> rr>=0 && cc>=0 && cc<colsInRow(rr));
+}
+
+/* ---------------- 音效 ---------------- */
+function ac(){ if(!audioCtx){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return audioCtx; }
+function tone(f,d,type,vol,delay){ if(state.muted) return; const a=ac(); if(!a) return; const t0=a.currentTime+(delay||0);
+  const o=a.createOscillator(),g=a.createGain(); o.type=type||'sine'; o.frequency.setValueAtTime(f,t0);
+  g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(vol||.1,t0+.012); g.gain.exponentialRampToValueAtTime(.0001,t0+d);
+  o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0+d+.05); }
+function sfxShoot(){ tone(520,.1,'sine',.06); }
+function sfxPop(n){ for(let i=0;i<Math.min(n,5);i++) tone(600+i*110,.12,'triangle',.08,i*.04); }
+function sfxBoom(){ tone(70,.35,'sine',.16); tone(140,.25,'sawtooth',.05,.03); }
+function sfxZap(){ tone(1200,.18,'sawtooth',.05,0,300); }
+function sfxWin(){ [523,659,784,1047].forEach((f,i)=>tone(f,.25,'sine',.09,i*.12)); }
+function sfxLose(){ tone(300,.3,'sine',.08); tone(220,.4,'sine',.07,.15); }
+
+/* ---------------- 关卡构建 ---------------- */
+function makeCell(t){ return t==='I' ? {t:'I',hp:2} : {t}; }
+function buildLevel(n){
+  const L=LEVELS[n-1];
+  const rng=mulberry32(n*7919+13);
+  state.cells={};
+  // 按 count 从顶行往下铺（泡泡数逐关加速递增 6→75）
+  const spots=[];
+  for(let r=0;r<L.maxRows && spots.length<L.count;r++){
+    for(let c=0;c<colsInRow(r) && spots.length<L.count;c++) spots.push([r,c]);
+  }
+  for(const [r,c] of spots) setCellRaw(r,c,makeCell(Math.floor(rng()*L.colors)));
+  // 特殊泡泡替换下半区（不改变总数）
+  const lower=spots.filter(([r])=>r>=2);
+  const place=(t,cnt)=>{
+    for(let i=0;i<cnt && lower.length;i++){
+      const idx=Math.floor(rng()*lower.length);
+      const [r,c]=lower.splice(idx,1)[0];
+      setCellRaw(r,c,makeCell(t));
+    }
+  };
+  place('I',L.ice); place('S',L.stone); place('B',L.bomb);
+  state.specialRate=L.rate;
+  state.shotsLeft=L.shots;
+  state.swapsLeft=L.swaps;
+  state.score=0; state.flying=null; state.particles=[]; state.falling=[]; state.flashes=[]; state.won=false;
+  state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
+  state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
+  state.isNewBest=false; state.lastBonus=0;
+  initQueue();
+}
+function buildCustom(def){
+  state.cells={};
+  for(const it of def.cells){
+    if(it.t===undefined || it.t===null) continue;
+    if(it.t==='I') setCellRaw(it.r,it.c,{t:'I',hp:it.hp||2});
+    else setCellRaw(it.r,it.c,{t:it.t});
+  }
+  state.specialRate=0.10;
+  state.shotsLeft=def.shots;
+  state.swapsLeft=3;   // 自制关卡固定 3 次换泡
+  state.score=0; state.flying=null; state.particles=[]; state.falling=[]; state.flashes=[]; state.won=false;
+  state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
+  state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
+  state.isNewBest=false; state.lastBonus=0;
+  initQueue();
+}
+function presentNormalColors(){
+  const s=new Set();
+  for(const k of Object.keys(state.cells)){ const t=state.cells[k].t; if(typeof t==='number') s.add(t); }
+  return [...s];
+}
+function dominantColor(){
+  const cnt={};
+  for(const k of Object.keys(state.cells)){ const t=state.cells[k].t; if(typeof t==='number') cnt[t]=(cnt[t]||0)+1; }
+  let best=null,bn=-1;
+  for(const t in cnt) if(cnt[t]>bn){ bn=cnt[t]; best=+t; }
+  return best;
+}
+/* ---------- 智能发泡：只发场上仍存在的颜色；连歪两次发保底 ---------- */
+function rollNew(){
+  if(Math.random() < (state.specialRate||0)){
+    const s=['R','B','L'];
+    return s[(Math.random()*3)|0];
+  }
+  const pool=presentNormalColors();
+  return (pool.length?pool:[0])[(Math.random()*(pool.length?pool.length:1))|0];
+}
+function sanitize(t){
+  if(typeof t==='number'){
+    const pool=presentNormalColors();
+    if(pool.length && !pool.includes(t)){
+      const d=dominantColor();
+      return d!==null?d:pool[0];
+    }
+    if(!pool.length) return rollNew();
+  }
+  return t;
+}
+function initQueue(){
+  state.queue=[rollNew(),rollNew(),rollNew()];
+  state.cur=rollNew();
+  state.dryStreak=0;
+}
+function advanceQueue(){
+  // 保底：连续两发未消除 → 下一发必发场上占多数的颜色（必有成组潜力）
+  const rescue = state.dryStreak>=2;
+  let nxt = state.queue.shift();
+  if(rescue){
+    const d=dominantColor();
+    if(d!==null) nxt=d;
+  }
+  state.cur=sanitize(nxt);
+  while(state.queue.length<3) state.queue.push(sanitize(rollNew()));
+  sanitizeQueue();
+}
+/* 消除后立即全队列消毒：预览里绝不出现场上已不存在的颜色 */
+function sanitizeQueue(){
+  state.cur=sanitize(state.cur);
+  for(let i=0;i<state.queue.length;i++) state.queue[i]=sanitize(state.queue[i]);
+}
+function finishShot(popped){
+  if(popped>0){
+    state.combo++;
+    state.maxCombo=Math.max(state.maxCombo,state.combo);
+  } else {
+    state.combo=0;
+  }
+  advanceQueue();
+  checkEnd();
+}
+
+/* ---------------- 核心逻辑 ---------------- */
+function bfsWild(r,c,color){
+  const seen=new Set([key(r,c)]);
+  const stack=[[r,c]]; const group=[[r,c]];
+  while(stack.length){
+    const [cr,cc]=stack.pop();
+    for(const [nr,nc] of neighbors(cr,cc)){
+      const k=key(nr,nc);
+      if(seen.has(k)) continue;
+      const cell=getCell(nr,nc);
+      if(!cell) continue;
+      if(cell.t===color || cell.t==='R'){ seen.add(k); stack.push([nr,nc]); group.push([nr,nc]); }
+    }
+  }
+  return group;
+}
+function findFloating(){
+  const reach=new Set(); const stack=[];
+  for(let c=0;c<colsInRow(0);c++){
+    if(getCell(0,c)!==undefined){ reach.add(key(0,c)); stack.push([0,c]); }
+  }
+  while(stack.length){
+    const [cr,cc]=stack.pop();
+    for(const [nr,nc] of neighbors(cr,cc)){
+      const k=key(nr,nc);
+      if(getCell(nr,nc)!==undefined && !reach.has(k)){ reach.add(k); stack.push([nr,nc]); }
+    }
+  }
+  const floating=[];
+  for(const k of Object.keys(state.cells)){
+    if(!reach.has(k)) floating.push(parseKey(k));
+  }
+  return floating;
+}
+/* 连锁引擎：爆炸点队列 + 整行清除集合，互相触发 */
+function cascade(explQueue, rows){
+  let count=0;
+  while(explQueue.length || rows.size){
+    if(explQueue.length){
+      const {x,y}=explQueue.shift();
+      spawnExplosion(x,y);
+      state.shakeT=Math.max(state.shakeT,.4);
+      sfxBoom();
+      for(const k of Object.keys(state.cells)){
+        const [rr,cc]=parseKey(k);
+        const dx=cellX(rr,cc)-x, dy=cellY(rr)-y;
+        if(dx*dx+dy*dy <= BOMB_RAD*BOMB_RAD){
+          const cell=getCell(rr,cc);
+          delCell(rr,cc); count++;
+          state.score += cell.t==='S' ? 30 : 10;
+          spawnPop(cellX(rr,cc),cellY(rr),cell);
+          if(cell.t==='B') explQueue.push({x:cellX(rr,cc),y:cellY(rr)});
+          if(cell.t==='L') rows.add(rr);
+        }
+      }
+    } else {
+      const r=[...rows][0]; rows.delete(r);
+      state.flashes.push({r, t:0});
+      sfxZap();
+      for(let c=0;c<colsInRow(r);c++){
+        const cell=getCell(r,c);
+        if(!cell || cell.t==='S') continue;
+        delCell(r,c); count++; state.score+=10;
+        spawnPop(cellX(r,c),cellY(r),cell);
+        if(cell.t==='B') explQueue.push({x:cellX(r,c),y:cellY(r)});
+      }
+    }
+  }
+  return count;
+}
+function popGroup(keys){
+  const mult=Math.min(5,state.combo+1);   // 连击倍率：连消第N发 ×N（上限×5）
+  let popped=0;
+  const explQueue=[]; const rows=new Set();
+  const removed=new Set();
+  for(const k of keys){
+    const [r,c]=parseKey(k);
+    const cell=getCell(r,c);
+    if(!cell) continue;
+    removed.add(k); delCell(r,c); popped++; state.score+=10*mult;
+    spawnPop(cellX(r,c),cellY(r),cell);
+    if(cell.t==='B') explQueue.push({x:cellX(r,c),y:cellY(r)});
+    if(cell.t==='L') rows.add(r);
+  }
+  popped += cascade(explQueue, rows);
+  // 相邻冰块受损
+  const damaged=new Set();
+  for(const k of removed){
+    const [r,c]=parseKey(k);
+    for(const [nr,nc] of neighbors(r,c)){
+      const nk=key(nr,nc);
+      if(damaged.has(nk)) continue;
+      const nb=getCell(nr,nc);
+      if(nb && nb.t==='I'){
+        damaged.add(nk); nb.hp--;
+        if(nb.hp<=0){ delCell(nr,nc); popped++; state.score+=15; spawnPop(cellX(nr,nc),cellY(nr),nb); }
+      }
+    }
+  }
+  // 悬空坠落
+  let dropped=0;
+  for(const [fr,fc] of findFloating()){
+    state.falling.push({x:cellX(fr,fc), y:cellY(fr), vy:0, cell:getCell(fr,fc)});
+    delCell(fr,fc); dropped++; state.score+=20;
+  }
+  if(popped>0) sfxPop(Math.min(popped,6));
+  sanitizeQueue();
+  checkEnd();
+  return {popped,dropped};
+}
+function resolveShot(r,c){
+  const cell=getCell(r,c);
+  if(!cell) return {popped:0,dropped:0};
+  let group;
+  if(cell.t==='R'){
+    const counts={};
+    for(const [nr,nc] of neighbors(r,c)){
+      const nb=getCell(nr,nc);
+      if(nb && typeof nb.t==='number') counts[nb.t]=(counts[nb.t]||0)+1;
+    }
+    let best=null,bn=0;
+    for(const t in counts) if(counts[t]>bn){ bn=counts[t]; best=+t; }
+    if(best===null) return {popped:0,dropped:0};
+    group=bfsWild(r,c,best);
+  } else {
+    group=bfsWild(r,c,cell.t);
+  }
+  if(group.length>=3) return popGroup(group.map(([gr,gc])=>key(gr,gc)));
+  return {popped:0,dropped:0};
+}
+/* 落地结算统一入口：无论是否消除都要推进队列并检查胜负 */
+function settleLanding(popped){
+  state.totalPopped+=popped;
+  finishShot(popped);
+}
+function checkEnd(){
+  if(state.screen==='result') return;   // 幂等：已结算不再重复
+  const remaining=Object.keys(state.cells).length;
+  if(remaining===0){
+    state.won=true;
+    state.resultStart=performance.now()/1000;
+    state.starsShown=0;
+    const total = state.mode==='official' ? LEVELS[state.level-1].shots : (state.customDef?state.customDef.shots:state.shotsLeft);
+    const used = total - state.shotsLeft;
+    const par = state.mode==='official' ? LEVELS[state.level-1].par : Math.max(6, Math.round(total*0.7));
+    state.stars = used<=par ? 3 : used<=par+2 ? 2 : 1;
+    if(state.mode==='official'){
+      state.starMap[state.level]=Math.max(state.starMap[state.level]||0, state.stars);
+      state.unlocked=Math.max(state.unlocked, Math.min(LEVELS.length, state.level+1));
+      // 连胜 + 奖金：连赢越多，每关额外分越多
+      state.streak++; state.bestStreak=Math.max(state.bestStreak,state.streak);
+      state.lastBonus = state.streak>=2 ? state.streak*30 : 0;
+      state.score += state.lastBonus;
+      // 最佳纪录
+      const prev=state.bestMap[state.level]||0;
+      state.isNewBest = state.score>prev;
+      if(state.isNewBest) state.bestMap[state.level]=state.score;
+      // 章节通关检测（每章 10 关全通 → 奖励弹窗 +200）
+      const ch=Math.floor((state.level-1)/10);
+      let chDone=true;
+      for(let i=ch*10+1;i<=ch*10+10;i++) if(!(state.starMap[i]>0)){ chDone=false; break; }
+      if(chDone && state.chapterClear<ch){
+        state.chapterClear=ch; state.score+=200;
+        pushPopup(CHAPTERS[ch].icon, CHAPTERS[ch].name+' · 章节通关！', ['本章 10 关全部通关','章节奖励 +200 分']);
+      }
+      if(state.isNewBest && prev>0) pushPopup('🏆','新纪录！',['第 '+state.level+' 关最佳成绩刷新','得分 '+state.score]);
+      if(state.streak>=5 && state.streak%5===0) pushPopup('🔥','连胜 ×'+state.streak, ['连赢加成持续累计中','历史最高连胜 '+state.bestStreak]);
+    }
+    state.screen='result'; sfxWin(); save();
+  } else if(state.shotsLeft<=0 && !state.flying){
+    state.won=false; state.screen='result'; state.resultStart=performance.now()/1000; state.starsShown=0;
+    if(state.mode==='official') state.streak=0;
+    sfxLose(); save();
+  }
+}
+
+/* ---------------- 发射物理 ---------------- */
+function findSnapCell(px,py){
+  let best=null, bestD=Infinity;
+  for(let r=0;r<=13;r++){
+    const cn=colsInRow(r);
+    for(let c=0;c<cn;c++){
+      if(getCell(r,c)!==undefined) continue;
+      const adj = r===0 || neighbors(r,c).some(([nr,nc])=>getCell(nr,nc)!==undefined);
+      if(!adj) continue;
+      const dx=px-cellX(r,c), dy=py-cellY(r);
+      const d=dx*dx+dy*dy;
+      if(d<bestD){ bestD=d; best={r,c}; }
+    }
+  }
+  return best;
+}
+function shoot(){
+  if(state.screen!=='game' || !state.ready || state.flying || state.shotsLeft<=0) return;
+  if(!state.aim.valid) return;
+  let dx=state.aim.x-SX, dy=state.aim.y-SY;
+  const len=Math.hypot(dx,dy); if(len<1) return;
+  dx/=len; dy/=len;
+  if(dy>-0.15) return;
+  state.flying={x:SX,y:SY,vx:dx*SPEED,vy:dy*SPEED,color:state.cur};
+  state.shotsLeft--;
+  sfxShoot();
+}
+function afterSpecialHit(){ settleLanding(0); }
+function stepFlying(dt){
+  const f=state.flying; if(!f) return;
+  f.x+=f.vx*dt; f.y+=f.vy*dt;
+  if(f.x<R){f.x=R;f.vx=-f.vx;}
+  if(f.x>W-R){f.x=W-R;f.vx=-f.vx;}
+  let hit = f.y-R <= BOARD_TOP;
+  if(!hit){
+    for(const k of Object.keys(state.cells)){
+      const [r,c]=parseKey(k);
+      const dx=f.x-cellX(r,c), dy=f.y-cellY(r);
+      if(dx*dx+dy*dy < (2*R-3)*(2*R-3)){ hit=true; break; }
+    }
+  }
+  if(hit){
+    state.flying=null;
+    if(f.color==='B'){
+      const n=cascade([{x:f.x,y:f.y}], new Set());
+      settleLanding(n);
+    } else if(f.color==='L'){
+      const r=Math.max(0, Math.round((f.y-BOARD_TOP-R)/ROWH));
+      const n=cascade([], new Set([r]));
+      settleLanding(n);
+    } else {
+      const snap=findSnapCell(f.x,f.y) || {r:0,c:Math.max(0,Math.min(colsInRow(0)-1,Math.round((f.x-BOARD_LEFT-R)/(2*R))))};
+      setCellRaw(snap.r,snap.c,makeCell(f.color));
+      const res=resolveShot(snap.r,snap.c);
+      settleLanding(res.popped);
+    }
+  } else if(f.y>H+R){
+    state.flying=null; settleLanding(0);
+  }
+}
+
+/* ---------------- 粒子特效 ---------------- */
+function spawnPop(x,y,cell){
+  const n=state.reduceMotion?3:8;
+  const t=cell?cell.t:0;
+  const color = typeof t==='number' ? PALETTE[t%PALETTE.length].main
+    : t==='R' ? '#e8e0ff' : t==='B' ? '#6a707a' : t==='L' ? '#ffd97a' : t==='I' ? '#bfe6fa' : '#9aa0a8';
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=60+Math.random()*120;
+    state.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-40,t:0,life:.5+Math.random()*.3,color,r:2+Math.random()*3});
+  }
+}
+function spawnExplosion(x,y){
+  const n=state.reduceMotion?6:18;
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=90+Math.random()*180;
+    state.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,t:0,life:.55+Math.random()*.3,color:Math.random()<.5?'#ffb38a':'#ffd97a',r:2.5+Math.random()*3});
+  }
+}
+
+/* ---------------- 存档 ---------------- */
+function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({
+  unlocked:state.unlocked, starMap:state.starMap, bestMap:state.bestMap,
+  streak:state.streak, bestStreak:state.bestStreak, menuPage:state.menuPage, chapterClear:state.chapterClear,
+  reduceMotion:state.reduceMotion, muted:state.muted, customLevels:state.customLevels,
+})); }catch(e){} }
+function load(){ try{
+  const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'{}');
+  state.unlocked=Math.min(d.unlocked||1, LEVELS.length); state.starMap=d.starMap||{};
+  state.bestMap=d.bestMap||{}; state.streak=d.streak||0; state.bestStreak=d.bestStreak||0;
+  state.menuPage=Math.max(0,Math.min(4,d.menuPage||0));
+  state.chapterClear=(d.chapterClear===undefined||d.chapterClear===null)?-1:d.chapterClear;
+  state.reduceMotion=!!d.reduceMotion; state.muted=!!d.muted;
+  state.customLevels=Array.isArray(d.customLevels)?d.customLevels.slice(0,12):[];
+}catch(e){} }
+
+/* ---------------- 创意工坊 ---------------- */
+const BRUSHES=[0,1,2,3,4,5,'R','B','L','I','S','E'];
+function edCellAt(x,y){
+  for(let r=0;r<ED_ROWS;r++){
+    for(let c=0;c<colsInRow(r);c++){
+      const dx=x-cellX(r,c), dy=y-cellY(r,ED_TOP);
+      if(dx*dx+dy*dy < R*R) return {r,c};
+    }
+  }
+  return null;
+}
+function edPaint(x,y){
+  const hit=edCellAt(x,y);
+  if(!hit) return;
+  const k=key(hit.r,hit.c);
+  if(state.editor.brush==='E') delete state.editor.cells[k];
+  else state.editor.cells[k]=state.editor.brush;
+}
+function editorDef(){
+  const cells=Object.entries(state.editor.cells).map(([k,t])=>{
+    const [r,c]=parseKey(k);
+    return {r,c,t};
+  });
+  return { shots:state.editor.shots, cells };
+}
+function saveCustom(){
+  const def=editorDef();
+  if(!def.cells.length){ toast('先画一些泡泡再保存吧'); return false; }
+  if(state.customLevels.length>=12){ toast('工坊最多保存 12 个关卡'); return false; }
+  state.customLevels.push({ name:'我的关卡 '+(state.customLevels.length+1), shots:def.shots, cells:def.cells });
+  save();
+  toast('已保存到创意工坊！');
+  return true;
+}
+function startPlaytest(){
+  const def=editorDef();
+  if(!def.cells.length){ toast('先画一些泡泡再试玩'); return; }
+  state.mode='test'; state.customDef=def;
+  buildCustom(def);
+  state.screen='game';
+}
+
+/* ---------------- 布局常量 ---------------- */
+const PAL_Y=64, PAL_H=36;
+function palX(i){ return 13 + i*33; }
+function edBtns(){ return {
+  test:{x:14,y:H-64,w:120,h:46},
+  save:{x:150,y:H-64,w:120,h:46},
+  back:{x:286,y:H-64,w:120,h:46},
+}; }
+function cusNewBtn(){ return {x:W/2-110,y:H-76,w:220,h:48}; }
+function menuWorkshopBtn(){ return {x:W/2-110,y:548,w:220,h:48}; }
+
+/* ---------------- 输入 ---------------- */
+function canvasXY(e){ const r=canvas.getBoundingClientRect(); return { x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height) }; }
+function inBox(p,b){ return p.x>=b.x && p.x<=b.x+b.w && p.y>=b.y && p.y<=b.y+b.h; }
+function updateAim(p){ if(!state.ready) return; state.aim.valid = p.y-SY < -10; state.aim.x=p.x; state.aim.y=p.y; }
+
+canvas.addEventListener('pointerdown', e=>{ e.preventDefault(); ac(); handleDown(canvasXY(e)); });
+canvas.addEventListener('pointermove', e=>{
+  const p=canvasXY(e);
+  if(state.screen==='game' && state.introConsumed) return;   // 开启手势中的移动不激活瞄准
+  if(state.screen==='game') updateAim(p);
+  if(state.screen==='editor' && state.editor.dragging) edPaint(p.x,p.y);
+});
+canvas.addEventListener('pointerup', e=>{ e.preventDefault(); handleUp(canvasXY(e)); });
+canvas.addEventListener('pointercancel', ()=>{ state.editor.dragging=false; });
+canvas.addEventListener('contextmenu', e=>e.preventDefault());
+
+function menuGridHit(p){
+  // 每页 10 关：5 列 × 2 行
+  const gx=12, gy=210, bw=68, bh=76, gap=14;
+  for(let i=0;i<10;i++){
+    const lv=state.menuPage*10+i+1;
+    if(lv>LEVELS.length) break;
+    const col=i%5, row=(i/5)|0;
+    const x=gx+col*(bw+gap), y=gy+row*(bh+gap);
+    if(p.x>=x && p.x<=x+bw && p.y>=y && p.y<=y+bh) return lv;
+  }
+  return 0;
+}
+function chapterTabHit(p){
+  if(p.y<106 || p.y>136) return -1;
+  for(let i=0;i<5;i++){
+    const x=8+i*82;
+    if(p.x>=x && p.x<=x+76) return i;
+  }
+  return -1;
+}
+function totalStars(){ let s=0; for(let i=1;i<=LEVELS.length;i++) s+=state.starMap[i]||0; return s; }
+function customRowHit(p){
+  for(let i=0;i<state.customLevels.length;i++){
+    const y=110+i*58;
+    if(p.y>=y && p.y<=y+50) return i;
+  }
+  return -1;
+}
+function handleDown(p){
+  // 奖励弹窗：点按任意位置关闭
+  if(state.popups.length){ state.popups.shift(); tone(600,.08,'triangle',.06); return; }
+  if(state.screen==='game' && !state.ready){
+    // 开场确认层：本次点击只用于开启，绝不发射（up 事件一并吞掉）
+    state.ready=true; state.introConsumed=true; state.aim.valid=false;
+    tone(880,.08,'triangle',.08); tone(1175,.1,'triangle',.06,.07);
+    return;
+  }
+  if(state.introConsumed && state.screen==='game'){
+    // 同一次点击的后续事件继续吞掉
+    return;
+  }
+  if(state.screen==='menu'){
+    if(inSound(p)){ toggleMute(); return; }
+    if(inReduce(p)){ toggleReduce(); return; }
+    const tab=chapterTabHit(p);
+    if(tab>=0){ state.menuPage=tab; tone(700,.06,'triangle',.05); save(); return; }
+    const lv=menuGridHit(p);
+    if(lv>0 && lv<=state.unlocked){ state.mode='official'; state.level=lv; buildLevel(lv); state.screen='game'; return; }
+    if(inBox(p,menuWorkshopBtn())){ state.screen='custom'; return; }
+    return;
+  }
+  if(state.screen==='custom'){
+    if(inSound(p)){ toggleMute(); return; }
+    if(inBack(p)){ state.screen='menu'; return; }
+    if(inBox(p,cusNewBtn())){ state.editor={cells:{},shots:12,brush:0,dragging:false}; state.screen='editor'; return; }
+    const i=customRowHit(p);
+    if(i>=0){
+      if(p.x>W-64){ state.customLevels.splice(i,1); save(); toast('已删除'); return; }
+      state.mode='custom'; state.customIndex=i; state.customDef=state.customLevels[i];
+      buildCustom(state.customLevels[i]); state.screen='game';
+    }
+    return;
+  }
+  if(state.screen==='editor'){
+    if(inBack(p)){ state.screen='custom'; return; }
+    // 步数 +/-
+    if(p.x>=300 && p.x<=332 && p.y>=10 && p.y<=42){ state.editor.shots=Math.max(5,state.editor.shots-1); return; }
+    if(p.x>=376 && p.x<=408 && p.y>=10 && p.y<=42){ state.editor.shots=Math.min(40,state.editor.shots+1); return; }
+    // 画笔
+    if(p.y>=PAL_Y && p.y<=PAL_Y+PAL_H){
+      const i=Math.floor((p.x-13)/33);
+      if(i>=0 && i<BRUSHES.length){ state.editor.brush=BRUSHES[i]; return; }
+    }
+    const b=edBtns();
+    if(inBox(p,b.test)){ startPlaytest(); return; }
+    if(inBox(p,b.save)){ saveCustom(); return; }
+    if(inBox(p,b.back)){ state.screen='custom'; return; }
+    edPaint(p.x,p.y);
+    state.editor.dragging=true;
+    return;
+  }
+  if(state.screen==='result'){
+    for(const [btn,act] of resultButtons()){
+      if(inBox(p,btn)){ act(); return; }
+    }
+    return;
+  }
+  if(state.screen==='game'){
+    if(inSound(p)){ toggleMute(); return; }
+    if(inReduce(p)){ toggleReduce(); return; }
+    if(inBox(p,SWAP_BTN)){
+      if(state.flying){ toast('泡泡飞行中不能换'); return; }
+      if(state.swapsLeft<=0){ toast('本关换泡次数已用完'); return; }
+      const first=state.queue[0];
+      state.queue[0]=state.cur;
+      state.cur=first;
+      state.swapsLeft--;
+      state.swapT=.3; tone(700,.07,'triangle',.07);
+      return;
+    }
+    if(inBack(p)){ state.screen= state.mode==='test' ? 'editor' : state.mode==='custom' ? 'custom' : 'menu'; return; }
+    updateAim(p);
+  }
+}
+function handleUp(p){
+  if(state.screen==='game'){
+    if(!state.ready) return;        // 未开始不发射
+    if(state.introConsumed){        // 开启用的那次点击，up 不发射
+      state.introConsumed=false;
+      return;
+    }
+    updateAim(p); shoot();
+  }
+  if(state.screen==='editor') state.editor.dragging=false;
+}
+function toggleReduce(){ state.reduceMotion=!state.reduceMotion; toast(state.reduceMotion?'已减少动态效果':'动态效果已恢复'); save(); }
+function toggleMute(){ state.muted=!state.muted; if(!state.muted){ tone(660,.08,'triangle',.08); tone(880,.08,'triangle',.08,.06); } toast(state.muted?'音效已关闭':'音效已开启'); save(); }
+function inReduce(p){ return p.x>=W-124 && p.x<=W-12 && p.y>=10 && p.y<=40; }
+function inSound(p){ return p.x>=W-124 && p.x<=W-12 && p.y>=50 && p.y<=80; }
+function inBack(p){ return p.x>=12 && p.x<=88 && p.y>=10 && p.y<=40; }
+function drawSoundBtn(){
+  ctx.fillStyle= state.muted?'rgba(200,215,208,.85)':'rgba(255,255,255,.8)';
+  roundRect(W-124,50,112,30,15); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=1.5; roundRect(W-124,50,112,30,15); ctx.stroke();
+  ctx.fillStyle= state.muted?'#8a9a90':'#5aa88f';
+  ctx.font='bold 13px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(state.muted?'🔇 音效关':'🔊 音效开',W-68,66);
+}
+
+function replayCurrent(){
+  if(state.mode==='official') buildLevel(state.level);
+  else buildCustom(state.customDef);
+  state.screen='game';
+}
+function resultButtons(){
+  const list=[];
+  list.push([{x:W/2-132,y:416,w:126,h:46}, replayCurrent]);
+  let nx=W/2+6;
+  if(state.mode==='official' && state.won && state.level<LEVELS.length){
+    list.push([{x:nx,y:416,w:126,h:46}, ()=>{ state.level++; buildLevel(state.level); state.screen='game'; }]);
+  }
+  const backAct = state.mode==='test' ? ()=>{ state.screen='editor'; }
+    : state.mode==='custom' ? ()=>{ state.screen='custom'; }
+    : ()=>{ state.screen='menu'; };
+  const backLabel = state.mode==='test' ? '回到编辑器' : state.mode==='custom' ? '回到工坊' : '回到选关';
+  list.push([{x:W/2-132,y:480,w:264,h:44,label:backLabel}, backAct]);
+  return list;
+}
+
+/* ---------------- 绘制 ---------------- */
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function drawBubble(x,y,r,ci,alpha){
+  const P=PALETTE[((ci%PALETTE.length)+PALETTE.length)%PALETTE.length];
+  ctx.save(); ctx.globalAlpha=alpha==null?1:alpha;
+  const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
+  g.addColorStop(0,P.light); g.addColorStop(.6,P.main); g.addColorStop(1,P.dark);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=P.dark; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,.75)';
+  ctx.beginPath(); ctx.ellipse(x-r*.35,y-r*.4,r*.22,r*.14,-.6,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function drawCellShape(x,y,r,cell,alpha){
+  const t=cell.t;
+  if(typeof t==='number') return drawBubble(x,y,r,t,alpha);
+  ctx.save(); ctx.globalAlpha=alpha==null?1:alpha;
+  if(t==='R'){
+    const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
+    g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6e0f5');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    for(let i=0;i<6;i++){
+      ctx.strokeStyle=PALETTE[i].main; ctx.lineWidth=3.5;
+      ctx.beginPath(); ctx.arc(x,y,r-3.5,i*Math.PI/3+.15,(i+1)*Math.PI/3-.15); ctx.stroke();
+    }
+    ctx.fillStyle='rgba(255,255,255,.8)';
+    ctx.beginPath(); ctx.ellipse(x-r*.3,y-r*.35,r*.18,r*.11,-.6,0,Math.PI*2); ctx.fill();
+  } else if(t==='B'){
+    const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
+    g.addColorStop(0,'#7c828c'); g.addColorStop(1,'#3a3f47');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r*.92,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#2c3037'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.strokeStyle='#8a929e'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(x+r*.35,y-r*.6); ctx.quadraticCurveTo(x+r*.65,y-r*.95,x+r*.85,y-r*.8); ctx.stroke();
+    ctx.fillStyle='#ffb38a'; ctx.beginPath(); ctx.arc(x+r*.85,y-r*.8,3.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffd97a'; ctx.beginPath(); ctx.arc(x+r*.85,y-r*.8,1.8,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.35)';
+    ctx.beginPath(); ctx.ellipse(x-r*.3,y-r*.35,r*.2,r*.12,-.6,0,Math.PI*2); ctx.fill();
+  } else if(t==='L'){
+    const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
+    g.addColorStop(0,'#fff7dd'); g.addColorStop(1,'#ffe9a8');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#e8b84a'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.fillStyle='#f5b942';
+    ctx.beginPath();
+    ctx.moveTo(x+r*.15,y-r*.6); ctx.lineTo(x-r*.35,y+r*.08); ctx.lineTo(x-r*.02,y+r*.08);
+    ctx.lineTo(x-r*.18,y+r*.6); ctx.lineTo(x+r*.38,y-r*.1); ctx.lineTo(x+r*.02,y-r*.1);
+    ctx.closePath(); ctx.fill();
+  } else if(t==='I'){
+    ctx.fillStyle='rgba(190,230,250,.92)';
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#8cc9f0'; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,.85)';
+    ctx.beginPath(); ctx.ellipse(x-r*.3,y-r*.38,r*.24,r*.13,-.6,0,Math.PI*2); ctx.fill();
+    if(cell.hp<=1){
+      ctx.strokeStyle='rgba(90,140,180,.8)'; ctx.lineWidth=1.6;
+      ctx.beginPath();
+      ctx.moveTo(x-r*.5,y-r*.3); ctx.lineTo(x-r*.1,y); ctx.lineTo(x-r*.35,y+r*.45);
+      ctx.moveTo(x-r*.1,y); ctx.lineTo(x+r*.4,y+r*.25);
+      ctx.stroke();
+    }
+  } else if(t==='S'){
+    ctx.fillStyle='#9aa0a8'; ctx.strokeStyle='#6e747c'; ctx.lineWidth=2;
+    ctx.beginPath();
+    const pts=[[-.9,-.25],[-.4,-.9],[.45,-.85],[.95,-.15],[.6,.8],[-.25,.95],[-.85,.5]];
+    pts.forEach((q,i)=> ctx[i?'lineTo':'moveTo'](x+q[0]*r,y+q[1]*r));
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,.25)';
+    ctx.beginPath(); ctx.moveTo(x-r*.4,y-r*.5); ctx.lineTo(x+r*.2,y-r*.55); ctx.lineTo(x-r*.05,y-r*.1); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBG(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#cdeaf7'); g.addColorStop(.45,'#e6f7ef'); g.addColorStop(1,'#fff6ec');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // 远山剪影
+  ctx.fillStyle='rgba(150,210,185,.28)';
+  ctx.beginPath(); ctx.moveTo(0,H); ctx.lineTo(0,H-120);
+  ctx.quadraticCurveTo(70,H-180,150,H-140); ctx.quadraticCurveTo(230,H-200,310,H-150);
+  ctx.quadraticCurveTo(370,H-175,420,H-130); ctx.lineTo(420,H); ctx.closePath(); ctx.fill();
+  // 飘云（缓慢移动）
+  const t=performance.now()/1000;
+  ctx.fillStyle='rgba(255,255,255,.8)';
+  for(const [bx,by,br,sp] of [[((t*8)%520)-50,60,16,8],[((t*12)%620)-100,44,13,12],[((t*6)%500)-40,88,10,6]]){
+    const x=bx; ctx.beginPath();
+    ctx.arc(x,by,br,0,Math.PI*2); ctx.arc(x+br*.8,by+2,br*.7,0,Math.PI*2); ctx.arc(x-br*.8,by+3,br*.65,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=.9;
+  // 草地
+  const gg=ctx.createLinearGradient(0,H-150,0,H);
+  gg.addColorStop(0,'rgba(180,225,150,0)'); gg.addColorStop(1,'rgba(150,205,125,.65)');
+  ctx.fillStyle=gg; ctx.fillRect(0,H-150,W,150);
+  // 小花
+  for(const [fx,fy,fc] of [[40,H-90,'#ffb3c7'],[120,H-58,'#ffd97a'],[200,H-100,'#fff'],[300,H-62,'#b9a5f0'],[370,H-88,'#ffb38a'],[250,H-46,'#ff9eb5']]){
+    ctx.fillStyle=fc; ctx.beginPath(); ctx.arc(fx,fy,5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffd97a'; ctx.beginPath(); ctx.arc(fx,fy,2,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+function drawHUD(){
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('← 返回',50,26);
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,46,110,26,13); ctx.fill();
+  ctx.fillStyle= state.shotsLeft<=3 ? '#e5718f':'#5aa88f'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('剩余 '+state.shotsLeft+' 步',67,60);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
+  const title = state.mode==='official' ? CHAPTERS[Math.floor((state.level-1)/10)].icon+' 第 '+state.level+' 关'
+    : state.mode==='test' ? '试玩关卡'
+    : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
+  ctx.fillText(title,W/2,26);
+  ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('得分 '+state.score+(state.streak>=2?' 🔥×'+state.streak:''),W/2,50);
+  ctx.fillStyle= state.reduceMotion?'#ffd97a':'rgba(255,255,255,.8)'; roundRect(W-124,10,112,30,15); ctx.fill();
+  ctx.fillStyle= state.reduceMotion?'#8a6a20':'#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
+  drawSoundBtn();
+}
+function drawAim(){
+  if(!state.aim.valid || state.flying) return;
+  let dx=state.aim.x-SX, dy=state.aim.y-SY; const len=Math.hypot(dx,dy); if(len<1) return;
+  dx/=len; dy/=len; if(dy>-0.15) return;
+  let x=SX,y=SY,vx=dx,vy=dy;
+  ctx.fillStyle='rgba(90,168,143,.55)';
+  for(let i=0;i<40;i++){
+    x+=vx*14; y+=vy*14;
+    if(x<R){x=R;vx=-vx;} if(x>W-R){x=W-R;vx=-vx;}
+    if(y-R<=BOARD_TOP) break;
+    let stop=false;
+    for(const k of Object.keys(state.cells)){ const [r,c]=parseKey(k);
+      const ddx=x-cellX(r,c), ddy=y-cellY(r); if(ddx*ddx+ddy*ddy<(2*R)*(2*R)){stop=true;break;} }
+    if(i%2===0){ ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); }
+    if(stop) break;
+  }
+}
+const SWAP_BTN = { x:SX-118, y:SY+30, w:56, h:36 };
+function drawShooter(){
+  ctx.fillStyle='#cfe8dc'; roundRect(SX-46,SY-6,92,44,16); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; roundRect(SX-46,SY-6,92,44,16); ctx.stroke();
+  drawCellShape(SX,SY,R-3,makeCell(state.cur));
+  // 队列预览：接下来 3 发（大→小）
+  ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('下一个',SX+78,SY-16);
+  drawCellShape(SX+78,SY+4,15,makeCell(state.queue[0]??0),.95);
+  drawCellShape(SX+104,SY+8,11,makeCell(state.queue[1]??0),.8);
+  drawCellShape(SX+125,SY+10,9,makeCell(state.queue[2]??0),.65);
+  // 交换按钮（显示剩余次数，用尽置灰）
+  const b=SWAP_BTN;
+  const canSwap = state.swapsLeft>0 && !state.flying;
+  ctx.fillStyle= canSwap ? '#4caf93' : '#b8c9c1';
+  roundRect(b.x,b.y,b.w,b.h,18); ctx.fill();
+  if(canSwap){ ctx.strokeStyle='#3f8f77'; ctx.lineWidth=2; roundRect(b.x,b.y,b.w,b.h,18); ctx.stroke(); }
+  ctx.fillStyle= canSwap ? '#fff' : '#e8f0ec';
+  ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('⇄ 换 ×'+state.swapsLeft,b.x+b.w/2,b.y+b.h/2);
+  // 连击浮标
+  if(state.combo>=2){
+    const cx=SX, cy=SY-58;
+    const pulse=.85+Math.sin(performance.now()/120)*.15;
+    ctx.fillStyle='rgba(255,217,122,'+pulse+')'; ctx.beginPath(); ctx.arc(cx,cy,26,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#e8b84a'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,26,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='#8a6a20'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('×'+state.combo,cx,cy+1);
+    ctx.fillStyle='#c9a227'; ctx.font='bold 11px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('连击',cx,cy+17);
+  }
+}
+function drawGame(){
+  drawBG();
+  ctx.save();
+  if(state.shakeT>0 && !state.reduceMotion){
+    ctx.translate((Math.random()-.5)*8*state.shakeT,(Math.random()-.5)*8*state.shakeT);
+  }
+  ctx.strokeStyle='rgba(127,184,164,.3)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(10,BOARD_TOP); ctx.lineTo(W-10,BOARD_TOP); ctx.stroke();
+  // 泡泡淡入：按行逐行浮现（开场演出）
+  const t=performance.now()/1000;
+  const intro=state.ready?1:Math.min(1,(t-state.introT)/1.2);
+  let k=0;
+  const rowMax={};
+  for(const kk of Object.keys(state.cells)){ const r=parseKey(kk)[0]; rowMax[r]=1; }
+  for(const kk of Object.keys(state.cells)){
+    const [r,c]=parseKey(kk);
+    const appear = Math.min(1, Math.max(0,(intro*10-r)/1.2));
+    drawCellShape(cellX(r,c),cellY(r),R-1,getCell(r,c),appear);
+    k++;
+  }
+  void k;
+  // 闪电行闪光
+  state.flashes=state.flashes.filter(f=>{
+    f.t+=1/60;
+    const y=cellY(f.r);
+    ctx.globalAlpha=Math.max(0,.7-f.t*2);
+    ctx.fillStyle='#ffd97a';
+    ctx.fillRect(8,y-6,W-16,12);
+    ctx.globalAlpha=1;
+    return f.t<.35;
+  });
+  drawAim();
+  if(state.flying) drawCellShape(state.flying.x,state.flying.y,R-2,makeCell(state.flying.color));
+  state.falling=state.falling.filter(f=>{
+    f.vy+=900/60; f.y+=f.vy/60;
+    drawCellShape(f.x,f.y,R-2,f.cell,.9);
+    return f.y<H+R;
+  });
+  state.particles=state.particles.filter(p=>{
+    p.t+=1/60; p.x+=p.vx/60; p.y+=p.vy/60; p.vy+=150/60;
+    ctx.globalAlpha=Math.max(0,1-p.t/p.life); ctx.fillStyle=p.color;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    return p.t<p.life;
+  });
+  drawShooter();
+  ctx.restore();
+  drawHUD();
+  if(!state.ready) drawIntroOverlay();
+  drawToast();
+}
+/* 关卡开场确认层：防止误触，展示关卡情报 */
+function drawIntroOverlay(){
+  ctx.fillStyle='rgba(255,255,255,.86)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  const title = state.mode==='official' ? CHAPTERS[Math.floor((state.level-1)/10)].icon+' 第 '+state.level+' 关 · '+CHAPTERS[Math.floor((state.level-1)/10)].name
+    : state.mode==='test' ? '试玩关卡' : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 26px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🫧 '+title,W/2,130);
+  // 关卡情报卡
+  const card={x:40,y:180,w:W-80,h:210};
+  ctx.fillStyle='rgba(255,255,255,.95)'; roundRect(card.x,card.y,card.w,card.h,22); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2.5; roundRect(card.x,card.y,card.w,card.h,22); ctx.stroke();
+  const L=state.mode==='official'?LEVELS[state.level-1]:null;
+  const info=[
+    ['🎈 场上泡泡', state.mode==='official'?String(L.count)+' 个':String(Object.keys(state.cells).length)+' 个'],
+    ['🎯 限步挑战', state.mode==='official'?String(L.shots)+' 步':String(state.shotsLeft)+' 步'],
+    ['⇄ 换泡次数', String(state.swapsLeft)+' 次'],
+  ];
+  if(state.mode==='official') info.push(['⭐ 三星目标', '≤ '+L.par+' 步完成']);
+  else info.push(['⭐ 三星目标', '≤ '+Math.max(6,Math.round((state.mode==='custom'?state.customDef.shots:state.shotsLeft)*0.7))+' 步完成']);
+  ctx.font='15px "Segoe UI",system-ui,sans-serif';
+  for(let i=0;i<info.length;i++){
+    ctx.fillStyle='#7fb8a4'; ctx.textAlign='left';
+    ctx.fillText(info[i][0],card.x+26,card.y+34+i*34);
+    ctx.fillStyle='#3f8f77'; ctx.textAlign='right';
+    ctx.fillText(info[i][1],card.x+card.w-26,card.y+34+i*34);
+  }
+  // 特殊泡泡图例（如果有）
+  if(state.mode==='official' && (L.ice||L.stone||L.bomb)){
+    ctx.textAlign='center'; ctx.fillStyle='#a8bcb2'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    const tags=[];
+    if(L.ice) tags.push('🧊 冰块'); if(L.stone) tags.push('🪨 石头'); if(L.bomb) tags.push('💣 炸弹');
+    ctx.fillText('本关特殊泡泡：'+tags.join(' · '),W/2,card.y+card.h-16);
+  }
+  // 开始按钮（呼吸光效）
+  const bt={x:W/2-120,y:420,w:240,h:56};
+  const pulse=.5+Math.sin(performance.now()/350)*.15;
+  ctx.fillStyle='#4caf93'; ctx.globalAlpha=pulse;
+  roundRect(bt.x,bt.y,bt.w,bt.h,28); ctx.fill();
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#fff'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('开始游戏 ▶',W/2,bt.y+bt.h/2+1);
+  ctx.fillStyle='#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('点按任意位置开始',W/2,506);
+}
+function drawMenu(){
+  drawBG();
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 28px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🫧 泡泡花园',W/2,54);
+  // 总星数进度条
+  const ts=totalStars(), max=LEVELS.length*3;
+  ctx.fillStyle='rgba(255,255,255,.85)'; roundRect(36,74,W-72,26,13); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=1.5; roundRect(36,74,W-72,26,13); ctx.stroke();
+  const frac=Math.min(1,ts/max);
+  if(frac>0){
+    ctx.fillStyle='#ffd97a'; roundRect(38,76,Math.max(12,(W-76)*frac),22,11); ctx.fill();
+  }
+  ctx.fillStyle='#8a6a20'; ctx.font='bold 12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('⭐ '+ts+' / '+max+' 星',W/2,87);
+  // 章节标签页
+  for(let i=0;i<5;i++){
+    const x=8+i*82, sel=state.menuPage===i;
+    const chStart=i*10+1, chEnd=i*10+10;
+    let chStars=0; for(let l=chStart;l<=chEnd;l++) chStars+=state.starMap[l]||0;
+    ctx.fillStyle= sel?'#4caf93':'rgba(255,255,255,.8)';
+    roundRect(x,106,76,30,14); ctx.fill();
+    if(sel){ ctx.strokeStyle='#3f8f77'; ctx.lineWidth=2; roundRect(x,106,76,30,14); ctx.stroke(); }
+    ctx.fillStyle= sel?'#fff':'#7fb8a4'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(CHAPTERS[i].icon,x+18,121);
+    ctx.font=(sel?'bold ':'')+'11px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(chStars+'★',x+50,121);
+  }
+  // 当前章节标题
+  const CH=CHAPTERS[state.menuPage];
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 17px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(CH.icon+' '+CH.name,W/2,162);
+  ctx.fillStyle='#a8bcb2'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(CH.desc,W/2,184);
+  // 关卡网格 5×2
+  const gx=12, gy=210, bw=68, bh=76, gap=14;
+  for(let i=0;i<10;i++){
+    const lv=state.menuPage*10+i+1;
+    if(lv>LEVELS.length) break;
+    const col=i%5, row=(i/5)|0;
+    const x=gx+col*(bw+gap), y=gy+row*(bh+gap);
+    const locked=lv>state.unlocked;
+    const nextUp=!locked && !(state.starMap[lv]>0);   // 下一关待打 → 呼吸高亮
+    ctx.fillStyle= locked?'rgba(200,215,208,.5)': nextUp?'#fffbe8':'rgba(255,255,255,.9)';
+    roundRect(x,y,bw,bh,14); ctx.fill();
+    if(nextUp){
+      const pulse=.6+Math.sin(performance.now()/300)*.3;
+      ctx.strokeStyle='rgba(232,184,74,'+pulse+')'; ctx.lineWidth=2.5;
+    } else {
+      ctx.strokeStyle= locked?'#c8d7d0':'#9fd0bc'; ctx.lineWidth=2;
+    }
+    roundRect(x,y,bw,bh,14); ctx.stroke();
+    ctx.fillStyle= locked?'#a8bcb2':'#3f8f77'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(locked?'🔒':lv, x+bw/2, y+26);
+    const st=state.starMap[lv]||0;
+    ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    let s=''; for(let j=0;j<3;j++) s+= j<st?'★':'☆';
+    ctx.fillStyle= locked?'#c0cfc7':'#e8b84a';
+    ctx.fillText(s, x+bw/2, y+50);
+    const best=state.bestMap[lv]||0;
+    ctx.fillStyle='#b8c9c1'; ctx.font='9px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(best?('最佳 '+best):'', x+bw/2, y+65);
+  }
+  // 连胜徽章
+  if(state.streak>=2){
+    ctx.fillStyle='#ffb38a'; roundRect(W/2-88,392,176,34,17); ctx.fill();
+    ctx.fillStyle='#7a3b1e'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('🔥 连胜 ×'+state.streak+' · 每关+'+(state.streak*30)+'分',W/2,409);
+  } else if(state.bestStreak>=2){
+    ctx.fillStyle='#c8d7d0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('历史最高连胜 '+state.bestStreak+' · 连赢有额外加分',W/2,409);
+  }
+  // 工坊入口
+  const wb=menuWorkshopBtn();
+  ctx.fillStyle='#ffb38a'; roundRect(wb.x,wb.y,wb.w,wb.h,24); ctx.fill();
+  ctx.strokeStyle='#e88a5a'; ctx.lineWidth=2; roundRect(wb.x,wb.y,wb.w,wb.h,24); ctx.stroke();
+  ctx.fillStyle='#7a3b1e'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🎨 创意工坊',wb.x+wb.w/2,wb.y+wb.h/2);
+  // 特殊泡泡图例
+  ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.fillStyle='#7fb8a4';
+  ctx.fillText('特殊泡泡：彩虹·万能  炸弹·爆破  闪电·清行  冰块·两击  石头·需炸',W/2,616);
+  ctx.fillStyle= state.reduceMotion?'#ffd97a':'rgba(255,255,255,.8)'; roundRect(W-124,10,112,30,15); ctx.fill();
+  ctx.fillStyle= state.reduceMotion?'#8a6a20':'#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
+  drawSoundBtn();
+  drawPopups();
+  drawToast();
+}
+function drawCustom(){
+  drawBG();
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('← 返回',50,26);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 22px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🎨 创意工坊',W/2,26);
+  if(!state.customLevels.length){
+    ctx.fillStyle='#a8bcb2'; ctx.font='15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('还没有自制关卡',W/2,240);
+    ctx.fillText('点击下方按钮开始创作吧！',W/2,268);
+  }
+  for(let i=0;i<state.customLevels.length;i++){
+    const lv=state.customLevels[i];
+    const y=110+i*58;
+    ctx.fillStyle='rgba(255,255,255,.9)'; roundRect(16,y,W-32,50,14); ctx.fill();
+    ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; roundRect(16,y,W-32,50,14); ctx.stroke();
+    ctx.fillStyle='#3f8f77'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='left';
+    ctx.fillText(lv.name,32,y+18);
+    ctx.fillStyle='#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(lv.cells.length+' 个泡泡 · 限 '+lv.shots+' 步',32,y+37);
+    ctx.fillStyle='#4caf93'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center';
+    ctx.fillText('▶',W-96,y+26);
+    ctx.fillStyle='#e5718f'; roundRect(W-64,y+10,36,30,12); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('✕',W-46,y+26);
+    ctx.textAlign='center';
+  }
+  const nb=cusNewBtn();
+  ctx.fillStyle='#ffb38a'; roundRect(nb.x,nb.y,nb.w,nb.h,24); ctx.fill();
+  ctx.strokeStyle='#e88a5a'; ctx.lineWidth=2; roundRect(nb.x,nb.y,nb.w,nb.h,24); ctx.stroke();
+  ctx.fillStyle='#7a3b1e'; ctx.font='bold 17px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('＋ 新建关卡',nb.x+nb.w/2,nb.y+nb.h/2);
+  drawSoundBtn();
+  drawToast();
+}
+function drawEditor(){
+  drawBG();
+  // 顶栏
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('← 返回',50,26);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 18px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🖌 关卡编辑器',W/2,26);
+  // 步数
+  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(296,10,112,32,16); ctx.fill();
+  ctx.fillStyle='#e5718f'; roundRect(300,14,32,24,12); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('−',316,27);
+  ctx.fillStyle='#4caf93'; roundRect(376,14,32,24,12); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.fillText('+',392,27);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(state.editor.shots+'步',354,27);
+  // 画笔
+  for(let i=0;i<BRUSHES.length;i++){
+    const x=palX(i), b=BRUSHES[i];
+    const sel=state.editor.brush===b;
+    ctx.fillStyle= sel?'rgba(255,217,122,.5)':'rgba(255,255,255,.75)';
+    roundRect(x,PAL_Y,31,PAL_H,10); ctx.fill();
+    ctx.strokeStyle= sel?'#e8b84a':'#c8d7d0'; ctx.lineWidth=sel?2.5:1.5;
+    roundRect(x,PAL_Y,31,PAL_H,10); ctx.stroke();
+    if(b==='E'){
+      ctx.fillStyle='#e5718f'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
+      ctx.fillText('✕',x+15.5,PAL_Y+PAL_H/2);
+    } else {
+      drawCellShape(x+15.5,PAL_Y+PAL_H/2,12,makeCell(b));
+    }
+  }
+  // 网格底
+  for(let r=0;r<ED_ROWS;r++){
+    for(let c=0;c<colsInRow(r);c++){
+      ctx.fillStyle='rgba(255,255,255,.28)';
+      ctx.beginPath(); ctx.arc(cellX(r,c),cellY(r,ED_TOP),R-2,0,Math.PI*2); ctx.fill();
+    }
+  }
+  // 已画泡泡
+  for(const [k,t] of Object.entries(state.editor.cells)){
+    const [r,c]=parseKey(k);
+    drawCellShape(cellX(r,c),cellY(r,ED_TOP),R-2,makeCell(t));
+  }
+  // 底部按钮
+  const b=edBtns();
+  ctx.fillStyle='#4caf93'; roundRect(b.test.x,b.test.y,b.test.w,b.test.h,23); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('试玩',b.test.x+b.test.w/2,b.test.y+23);
+  ctx.fillStyle='#ffb38a'; roundRect(b.save.x,b.save.y,b.save.w,b.save.h,23); ctx.fill();
+  ctx.fillStyle='#7a3b1e'; ctx.fillText('保存关卡',b.save.x+b.save.w/2,b.save.y+23);
+  ctx.fillStyle='rgba(255,255,255,.85)'; roundRect(b.back.x,b.back.y,b.back.w,b.back.h,23); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; roundRect(b.back.x,b.back.y,b.back.w,b.back.h,23); ctx.stroke();
+  ctx.fillStyle='#5aa88f'; ctx.fillText('回到工坊',b.back.x+b.back.w/2,b.back.y+b.back.h/2);
+  drawToast();
+}
+function drawResult(){
+  drawGame();
+  ctx.fillStyle='rgba(255,255,255,.88)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  // 结算计时（用于星星逐个弹出与彩带）
+  const now=performance.now()/1000;
+  const rt = state.resultStart>0 ? now-state.resultStart : 0;
+  if(state.won){
+    ctx.fillStyle='#3f8f77'; ctx.font='bold 34px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('🎉 过关啦！',W/2,190);
+    // 星星逐个弹出（每 0.35s 一颗，弹跳缩放）
+    ctx.font='42px "Segoe UI",system-ui,sans-serif';
+    for(let i=0;i<3;i++){
+      const th=0.5+i*0.35;
+      const done = rt>th;
+      const prog=Math.min(1,(rt-th)/0.3);
+      const scale = done ? (1+Math.sin(Math.min(1,prog)*Math.PI)*0.35) : 0;
+      if(done && i>=state.starsShown){ state.starsShown=i+1; if(!state.muted) tone(700+i*160,.18,'triangle',.09); }
+      ctx.save();
+      ctx.translate(W/2-64+i*64, 252);
+      ctx.scale(scale,scale);
+      ctx.fillStyle = done ? '#e8b84a' : '#d8cfb8';
+      ctx.font='42px "Segoe UI",system-ui,sans-serif';
+      ctx.fillText(i<state.stars?'★':'☆',0,0);
+      ctx.restore();
+    }
+    ctx.fillStyle='#7fb8a4'; ctx.font='15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('得分 '+state.score+(state.isNewBest?'  🏆新纪录':''),W/2,296);
+    if(state.lastBonus>0){
+      ctx.fillStyle='#e88a5a'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+      ctx.fillText('🔥 连胜加成 +'+state.lastBonus,W/2,314);
+    }
+  } else {
+    ctx.fillStyle='#e5718f'; ctx.font='bold 32px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('步数用完了…',W/2,200);
+    ctx.fillStyle='#7fb8a4'; ctx.font='15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('再试一次，你可以的！',W/2,248);
+  }
+  // 本关统计卡
+  const sw=state.mode==='official'?LEVELS[state.level-1].swaps:3;
+  const stats=[
+    ['🎈 消除', state.totalPopped+' 个'],
+    ['🔥 最大连击', '×'+(state.maxCombo||1)],
+    ['⇄ 换泡', (sw-state.swapsLeft)+' / '+sw+' 次'],
+    ['🎯 剩余', state.shotsLeft+' 步'],
+  ];
+  ctx.fillStyle='rgba(255,255,255,.95)'; roundRect(50,326,W-100,84,18); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; roundRect(50,326,W-100,84,18); ctx.stroke();
+  ctx.font='14px "Segoe UI",system-ui,sans-serif';
+  for(let i=0;i<4;i++){
+    const col=i%2, row=(i/2)|0;
+    ctx.fillStyle='#7fb8a4'; ctx.textAlign='left';
+    ctx.fillText(stats[i][0],66+col*160,350+row*28);
+    ctx.fillStyle='#3f8f77'; ctx.textAlign='right';
+    ctx.fillText(stats[i][1],W-66+col*160,350+row*28);
+  }
+  // 彩带庆祝（过关时，2.5 秒内持续飘落）
+  if(state.won && rt<2.5){
+    if(!state.reduceMotion && Math.random()<0.45){
+      const colors=['#ff9eb5','#7fd8b0','#8cc9f0','#ffd97a','#b9a5f0','#ffb38a'];
+      state.confetti.push({x:Math.random()*W,y:-8,vy:90+Math.random()*110,vx:(Math.random()-.5)*40,
+        rot:Math.random()*6,vr:(Math.random()-.5)*9,w:5+Math.random()*4,h:8+Math.random()*7,color:colors[(Math.random()*colors.length)|0]});
+    }
+  }
+  state.confetti=state.confetti.filter(cf=>{
+    cf.x+=cf.vx/60; cf.y+=cf.vy/60; cf.rot+=cf.vr/60;
+    ctx.save(); ctx.translate(cf.x,cf.y); ctx.rotate(cf.rot);
+    ctx.fillStyle=cf.color; ctx.fillRect(-cf.w/2,-cf.h/2,cf.w,cf.h);
+    ctx.restore();
+    return cf.y<H+20;
+  });
+  for(const [btn,act] of resultButtons()){
+    const label=btn.label || (btn.y===416 ? (btn.x<W/2?'重玩':'下一关') : '返回');
+    ctx.fillStyle= btn.label ? '#9fd0bc' : (btn.x<W/2 ? '#5aa88f':'#4caf93');
+    roundRect(btn.x,btn.y,btn.w,btn.h, btn.h>44?22:23); ctx.fill();
+    ctx.fillStyle= btn.label ? '#3f8f77' : '#fff';
+    ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(label,btn.x+btn.w/2,btn.y+btn.h/2);
+  }
+  drawPopups();
+}
+/* 奖励弹窗（章节通关 / 新纪录 / 连胜里程碑），点按任意位置关闭 */
+function drawPopups(){
+  if(!state.popups.length) return;
+  const p=state.popups[0];
+  ctx.fillStyle='rgba(40,70,60,.45)'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#fffdf5'; roundRect(60,210,W-120,200,24); ctx.fill();
+  ctx.strokeStyle='#e8b84a'; ctx.lineWidth=3; roundRect(60,210,W-120,200,24); ctx.stroke();
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font='40px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(p.icon,W/2,258);
+  ctx.fillStyle='#3f8f77'; ctx.font='bold 19px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(p.title,W/2,300);
+  ctx.fillStyle='#7fb8a4'; ctx.font='14px "Segoe UI",system-ui,sans-serif';
+  p.lines.forEach((ln,i)=>ctx.fillText(ln,W/2,330+i*22));
+  ctx.fillStyle='#c8d7d0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('点按任意位置继续',W/2,392);
+}
+function drawToast(){
+  if(state.toast && state.toastT>0){
+    ctx.globalAlpha=Math.min(1,state.toastT);
+    ctx.fillStyle='rgba(63,143,119,.92)'; roundRect(W/2-150,H-46,300,32,16); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='13px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(state.toast,W/2,H-30); ctx.globalAlpha=1;
+  }
+}
+function draw(){
+  if(state.screen==='menu') drawMenu();
+  else if(state.screen==='custom') drawCustom();
+  else if(state.screen==='editor') drawEditor();
+  else if(state.screen==='game') drawGame();
+  else drawResult();
+}
+
+/* ---------------- 主循环 ---------------- */
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now;
+  if(state.screen==='game') stepFlying(dt);
+  if(state.shakeT>0) state.shakeT=Math.max(0,state.shakeT-dt*1.6);
+  if(state.toastT>0) state.toastT-=dt;
+  saveAcc+=dt; if(saveAcc>5){ saveAcc=0; save(); }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+/* ---------------- 验证钩子 ---------------- */
+window.__GARDEN_TEST__ = {
+  version:'0.3',
+  loadLevel(n){ state.mode='official'; state.level=n; buildLevel(n); state.screen='game'; },
+  loadCustomDef(def){ state.mode='custom'; state.customDef=def; buildCustom(def); state.screen='game'; },
+  state(){ return { screen:state.screen, mode:state.mode, level:state.level, shotsLeft:state.shotsLeft, score:state.score, bubbles:Object.keys(state.cells).length, won:state.won, stars:state.stars }; },
+  getCells(){ return Object.keys(state.cells).map(k=>{ const [r,c]=parseKey(k); const cell=getCell(r,c); return {r,c,t:cell.t,hp:cell.hp}; }); },
+  setCell(r,c,t){ setCellRaw(r,c,makeCell(t)); },
+  clearAll(){ state.cells={}; },
+  groupAt(r,c){ const cell=getCell(r,c); if(!cell) return []; return bfsWild(r,c, cell.t==='R'?0:cell.t); },
+  floating(){ return findFloating(); },
+  resolve(r,c){ return resolveShot(r,c); },
+  /* 模拟一次真实发射落地：放置→消除→结算（combo/统计全链路） */
+  simulateShot(r,c,color){
+    setCellRaw(r,c,makeCell(color));
+    const res=resolveShot(r,c);
+    settleLanding(res.popped);
+    return res;
+  },
+  detonate(r,c){ const cell=getCell(r,c); if(!cell) return 0; delCell(r,c); return cascade([{x:cellX(r,c),y:cellY(r)}], new Set()); },
+  clearRowVia(r){ return cascade([], new Set([r])); },
+  unlocked(){ return state.unlocked; },
+  starsOf(n){ return state.starMap[n]||0; },
+  queue(){ return [state.cur, ...state.queue]; },
+  advance(){ advanceQueue(); },
+  swapsLeft(){ return state.swapsLeft; },
+  swap(){
+    if(state.swapsLeft<=0) return false;
+    const first=state.queue[0]; state.queue[0]=state.cur; state.cur=first;
+    state.swapsLeft--;
+    return true;
+  },
+  levelSwaps(n){ return LEVELS[n-1].swaps; },
+  levelCount(){ return LEVELS.length; },
+  levelShots(n){ return LEVELS[n-1].shots; },
+  levelPar(n){ return LEVELS[n-1].par; },
+  chapterOf(n){ return Math.floor((n-1)/10); },
+  totalStars(){ return totalStars(); },
+  streak(){ return state.streak; },
+  bestStreak(){ return state.bestStreak; },
+  lastBonus(){ return state.lastBonus; },
+  chapterCleared(){ return state.chapterClear; },
+  menuPage(){ return state.menuPage; },
+  setMenuPage(i){ state.menuPage=Math.max(0,Math.min(4,i)); },
+  popupCount(){ return state.popups.length; },
+  closePopup(){ if(state.popups.length){ state.popups.shift(); return true; } return false; },
+  resetProgress(){ state.starMap={}; state.bestMap={}; state.streak=0; state.bestStreak=0; state.chapterClear=-1; state.popups=[]; state.unlocked=1; state.menuPage=0; },
+  setStars(n,s){ state.starMap[n]=s; },
+  setShots(n){ state.shotsLeft=n; },
+  bestOf(n){ return state.bestMap[n]||0; },
+  ready(){ return state.ready; },
+  startGame(){ state.ready=true; },
+  introCardVisible(){ return state.screen==='game' && !state.ready; },
+  muted(){ return state.muted; },
+  setMuted(v){ state.muted=!!v; },
+  combo(){ return state.combo; },
+  maxCombo(){ return state.maxCombo; },
+  totalPopped(){ return state.totalPopped; },
+  resultStats(){ return { totalPopped:state.totalPopped, maxCombo:state.maxCombo, swapsUsed:(state.mode==='official'?LEVELS[state.level-1].swaps:3)-state.swapsLeft, shotsLeft:state.shotsLeft }; },
+  dryStreak(){ return state.dryStreak; },
+  levelBubbleCount(n){ const L=LEVELS[n-1]; return L.count; },
+  forceDry(n){ state.dryStreak=n; },
+  setReduce(v){ state.reduceMotion=!!v; },
+  edSet(r,c,t){ state.editor.cells[key(r,c)]=t; },
+  edGet(){ return Object.entries(state.editor.cells).map(([k,t])=>{ const [r,c]=parseKey(k); return {r,c,t}; }); },
+  edClear(){ state.editor.cells={}; },
+  edShots(n){ state.editor.shots=n; },
+  edSave(){ return saveCustom(); },
+  customCount(){ return state.customLevels.length; },
+  customList(){ return state.customLevels.map(l=>({name:l.name,shots:l.shots,cells:l.cells.length})); },
+  deleteCustom(i){ if(i>=0&&i<state.customLevels.length){ state.customLevels.splice(i,1); save(); return true; } return false; },
+  openCustomScreen(){ state.screen='custom'; },
+  openEditor(){ state.screen='editor'; },
+  clickAt(x,y){ const r=canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent('pointerdown',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true}));
+    canvas.dispatchEvent(new PointerEvent('pointerup',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true})); },
+};
+
+/* ---------------- 启动 ---------------- */
+function fit(){
+  const s=Math.min(innerWidth/W,innerHeight/H)*.96;
+  canvas.style.width=(W*s)+'px'; canvas.style.height=(H*s)+'px';
+  const dpr=devicePixelRatio||1;
+  canvas.width=Math.round(W*dpr); canvas.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize',fit);
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) save(); });
+load(); fit();
+document.getElementById('boot').remove();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
