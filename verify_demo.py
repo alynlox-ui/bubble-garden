@@ -1,7 +1,8 @@
-"""Headless Edge smoke test for Bubble Garden v0.4 (泡泡花园).
+"""Headless Edge smoke test for Bubble Garden v0.6 (泡泡花园).
 Covers: 50 levels / 5 chapters, streak bonus, chapter-clear rewards,
 workshop compliance validation, tutorial level, new-special intro popups,
-special bubbles, cascade engine, creative workshop, core pop/floating rules.
+special bubbles, cascade engine, creative workshop, core pop/floating rules,
+daily challenge, achievements, theme shop, career stats, loss encouragement.
 """
 from __future__ import annotations
 
@@ -85,7 +86,7 @@ def main() -> int:
         "--window-size=520,760", index.as_uri(),
     ]
     proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    report = {"game": "bubble-garden-demo-v0.5", "checks": [], "runtimeErrors": [], "screenshots": []}
+    report = {"game": "bubble-garden-demo-v0.6", "checks": [], "runtimeErrors": [], "screenshots": []}
 
     def check(name, ok, detail=None):
         entry = {"name": name, "ok": bool(ok)}
@@ -125,7 +126,7 @@ def main() -> int:
         check("hook_ready", ready)
         if not ready:
             raise RuntimeError("__GARDEN_TEST__ not exposed")
-        check("version_v05", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.5")
+        check("version_v06", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.6")
 
         # 2) 画布尺寸
         size = evaluate(ws, "({w:document.querySelector('#game').width,h:document.querySelector('#game').height})")
