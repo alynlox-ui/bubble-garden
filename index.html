@@ -2,12 +2,14 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>泡泡花园 · Bubble Garden v0.5</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>泡泡花园 · Bubble Garden v0.6</title>
 <style>
-  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);
+            overscroll-behavior:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
   #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
-  canvas{display:block;touch-action:none;border-radius:20px;box-shadow:0 18px 50px rgba(120,180,160,.30);}
+  canvas{display:block;touch-action:none;border-radius:22px;box-shadow:0 18px 50px rgba(120,180,160,.30);
+         -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
   #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
         font-family:"Segoe UI",system-ui,sans-serif;color:#5aa88f;}
   #boot h1{font-size:34px;margin:0 0 8px;letter-spacing:6px;color:#4caf93;}
@@ -16,11 +18,10 @@
 </head>
 <body>
 <div id="boot"><h1>🫧 泡泡花园</h1><p>正在吹泡泡…</p></div>
-<div id="stage"><canvas id="game"></canvas></div>
-<script>
+<div id="stage"><canvas id="game"></canvas></div><script>
 "use strict";
 /* ============================================================
-   泡泡花园 Bubble Garden v0.5
+   泡泡花园 Bubble Garden v0.6
    泡泡射击 + 5 章节 · 50 官方关卡 + 创意工坊（自制关卡）
    上瘾系统：连胜加成 / 最佳纪录 / 章节通关奖励 / 总星数进度
    v0.4：新手教程关 / 新泡泡介绍弹窗 / 工坊合规校验 / 难度下调
@@ -994,8 +995,10 @@ function inReduce(p){ return p.x>=W-124 && p.x<=W-12 && p.y>=10 && p.y<=40; }
 function inSound(p){ return p.x>=W-124 && p.x<=W-12 && p.y>=50 && p.y<=80; }
 function inBack(p){ return p.x>=12 && p.x<=88 && p.y>=10 && p.y<=40; }
 function drawSoundBtn(){
-  ctx.fillStyle= state.muted?'rgba(200,215,208,.85)':'rgba(255,255,255,.8)';
+  ctx.save(); ctx.shadowColor='rgba(120,180,160,.3)'; ctx.shadowBlur=5; ctx.shadowOffsetY=1;
+  ctx.fillStyle= state.muted?'rgba(210,222,216,.9)':'rgba(255,255,255,.88)';
   roundRect(W-124,50,112,30,15); ctx.fill();
+  ctx.restore();
   ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=1.5; roundRect(W-124,50,112,30,15); ctx.stroke();
   ctx.fillStyle= state.muted?'#8a9a90':'#5aa88f';
   ctx.font='bold 13px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -1029,12 +1032,28 @@ function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w
 function drawBubble(x,y,r,ci,alpha){
   const P=PALETTE[((ci%PALETTE.length)+PALETTE.length)%PALETTE.length];
   ctx.save(); ctx.globalAlpha=alpha==null?1:alpha;
-  const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
-  g.addColorStop(0,P.light); g.addColorStop(.6,P.main); g.addColorStop(1,P.dark);
+  // 底部柔光（让泡泡像浮在空中的玻璃球）
+  const soft=ctx.createRadialGradient(x,y+r*.25,r*.1,x,y,r);
+  soft.addColorStop(0,'rgba(255,255,255,.28)'); soft.addColorStop(.55,'rgba(255,255,255,0)');
+  ctx.fillStyle=soft; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  // 主体渐变
+  const g=ctx.createRadialGradient(x-r*.32,y-r*.34,r*.08,x,y,r);
+  g.addColorStop(0,P.light); g.addColorStop(.55,P.main); g.addColorStop(1,P.dark);
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
-  ctx.strokeStyle=P.dark; ctx.lineWidth=1.5; ctx.stroke();
-  ctx.fillStyle='rgba(255,255,255,.75)';
-  ctx.beginPath(); ctx.ellipse(x-r*.35,y-r*.4,r*.22,r*.14,-.6,0,Math.PI*2); ctx.fill();
+  // 描边：亮边 + 深色外圈（玻璃感）
+  ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=1.6;
+  ctx.beginPath(); ctx.arc(x,y,r-1,0,Math.PI*2); ctx.stroke();
+  ctx.strokeStyle=P.dark; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.arc(x,y,r-2.8,0,Math.PI*2); ctx.stroke();
+  // 主高光（左上大光斑）
+  ctx.fillStyle='rgba(255,255,255,.85)';
+  ctx.beginPath(); ctx.ellipse(x-r*.35,y-r*.42,r*.24,r*.16,-.6,0,Math.PI*2); ctx.fill();
+  // 次高光（右下小反光点）
+  ctx.fillStyle='rgba(255,255,255,.5)';
+  ctx.beginPath(); ctx.ellipse(x+r*.28,y+r*.34,r*.08,r*.05,.8,0,Math.PI*2); ctx.fill();
+  // 底部月牙反光
+  ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.arc(x,y,r*.82,.9,2.2); ctx.stroke();
   ctx.restore();
 }
 function drawCellShape(x,y,r,cell,alpha){
@@ -1186,21 +1205,36 @@ function drawTutorial(){
   ctx.fillText('▼',SX,SY-52);
 }
 function drawHUD(){
-  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
+  // 返回按钮（玻璃质感）
+  ctx.save(); ctx.shadowColor='rgba(120,180,160,.35)'; ctx.shadowBlur=6; ctx.shadowOffsetY=1;
+  ctx.fillStyle='rgba(255,255,255,.88)'; roundRect(12,10,76,30,15); ctx.fill();
+  ctx.restore();
   ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('← 返回',50,26);
-  ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,46,110,26,13); ctx.fill();
-  ctx.fillStyle= state.shotsLeft<=3 ? '#e5718f':'#5aa88f'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+  // 剩余步数（低步数红色呼吸提示）
+  ctx.save(); ctx.shadowColor='rgba(120,180,160,.35)'; ctx.shadowBlur=5; ctx.shadowOffsetY=1;
+  ctx.fillStyle='rgba(255,255,255,.88)'; roundRect(12,46,110,26,13); ctx.fill();
+  ctx.restore();
+  const low=state.shotsLeft<=3;
+  const breath=low? .7+.3*Math.sin(performance.now()/220) : 1;
+  ctx.fillStyle= low?'rgba(229,113,143,'+breath+')':'#5aa88f'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('剩余 '+state.shotsLeft+' 步',67,60);
-  ctx.fillStyle='#3f8f77'; ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
+  // 标题 + 得分（居中带投影）
+  ctx.save();
+  ctx.shadowColor='rgba(255,255,255,.85)'; ctx.shadowBlur=6;
+  ctx.fillStyle='#2f7d66'; ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
   const title = state.mode==='official' ? CHAPTERS[Math.floor((state.level-1)/10)].icon+' 第 '+state.level+' 关'
     : state.mode==='test' ? '试玩关卡'
     : state.mode==='daily' ? '📅 每日挑战'
     : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
   ctx.fillText(title,W/2,26);
-  ctx.fillStyle='#7fb8a4'; ctx.font='13px "Segoe UI",system-ui,sans-serif';
+  ctx.restore();
+  ctx.fillStyle='#5f9c88'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('得分 '+state.score+(state.streak>=2?' 🔥×'+state.streak:''),W/2,50);
-  ctx.fillStyle= state.reduceMotion?'#ffd97a':'rgba(255,255,255,.8)'; roundRect(W-124,10,112,30,15); ctx.fill();
+  // 减少动态
+  ctx.save(); ctx.shadowColor='rgba(120,180,160,.3)'; ctx.shadowBlur=5; ctx.shadowOffsetY=1;
+  ctx.fillStyle= state.reduceMotion?'#ffd97a':'rgba(255,255,255,.88)'; roundRect(W-124,10,112,30,15); ctx.fill();
+  ctx.restore();
   ctx.fillStyle= state.reduceMotion?'#8a6a20':'#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
   drawSoundBtn();
@@ -1222,23 +1256,37 @@ function drawAim(){
     if(stop) break;
   }
 }
-const SWAP_BTN = { x:SX-118, y:SY+30, w:56, h:36 };
+const SWAP_BTN = { x:SX-128, y:SY+28, w:64, h:42 };
 function drawShooter(){
-  ctx.fillStyle='#cfe8dc'; roundRect(SX-46,SY-6,92,44,16); ctx.fill();
-  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; roundRect(SX-46,SY-6,92,44,16); ctx.stroke();
-  drawCellShape(SX,SY,R-3,makeCell(state.cur));
+  // 发射托架：柔和的弧形底座（像花盆/弹弓口）
+  ctx.save();
+  const g=ctx.createLinearGradient(0,SY-8,0,SY+40);
+  g.addColorStop(0,'#e6f3ec'); g.addColorStop(1,'#c2e2d3');
+  ctx.fillStyle=g;
+  ctx.beginPath();
+  ctx.moveTo(SX-52,SY-6);
+  ctx.quadraticCurveTo(SX-56,SY+22,SX-46,SY+40);
+  ctx.quadraticCurveTo(SX,SY+52,SX+46,SY+40);
+  ctx.quadraticCurveTo(SX+56,SY+22,SX+52,SY-6);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; ctx.stroke();
+  // 底座细投影
+  ctx.fillStyle='rgba(120,180,160,.25)';
+  ctx.beginPath(); ctx.ellipse(SX,SY+44,44,7,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+  drawCellShape(SX,SY,R-2,makeCell(state.cur));
   // 队列预览：接下来 3 发（大→小）
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('下一个',SX+78,SY-16);
   drawCellShape(SX+78,SY+4,15,makeCell(state.queue[0]??0),.95);
   drawCellShape(SX+104,SY+8,11,makeCell(state.queue[1]??0),.8);
   drawCellShape(SX+125,SY+10,9,makeCell(state.queue[2]??0),.65);
-  // 交换按钮（显示剩余次数，用尽置灰）
+  // 交换按钮（显示剩余次数，用尽置灰；加大触摸区适配手机）
   const b=SWAP_BTN;
   const canSwap = state.swapsLeft>0 && !state.flying;
   ctx.fillStyle= canSwap ? '#4caf93' : '#b8c9c1';
-  roundRect(b.x,b.y,b.w,b.h,18); ctx.fill();
-  if(canSwap){ ctx.strokeStyle='#3f8f77'; ctx.lineWidth=2; roundRect(b.x,b.y,b.w,b.h,18); ctx.stroke(); }
+  roundRect(b.x,b.y,b.w,b.h,21); ctx.fill();
+  if(canSwap){ ctx.strokeStyle='#3f8f77'; ctx.lineWidth=2; roundRect(b.x,b.y,b.w,b.h,21); ctx.stroke(); }
   ctx.fillStyle= canSwap ? '#fff' : '#e8f0ec';
   ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('⇄ 换 ×'+state.swapsLeft,b.x+b.w/2,b.y+b.h/2);
@@ -1366,15 +1414,29 @@ function drawIntroOverlay(){
 function drawMenu(){
   drawBG();
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillStyle='#3f8f77'; ctx.font='bold 28px "Segoe UI",system-ui,sans-serif';
+  // 标题：渐变 + 投影（更精致）
+  const tg=ctx.createLinearGradient(0,38,0,66);
+  tg.addColorStop(0,'#57b99b'); tg.addColorStop(1,'#2f7d66');
+  ctx.save();
+  ctx.shadowColor='rgba(90,160,135,.45)'; ctx.shadowBlur=12; ctx.shadowOffsetY=2;
+  ctx.fillStyle=tg; ctx.font='bold 28px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('🫧 泡泡花园',W/2,54);
-  // 总星数进度条
+  ctx.restore();
+  // 总星数进度条（圆润+发光轨道）
   const ts=totalStars(), max=LEVELS.length*3;
-  ctx.fillStyle='rgba(255,255,255,.85)'; roundRect(36,74,W-72,26,13); ctx.fill();
+  ctx.save();
+  ctx.shadowColor='rgba(160,210,190,.6)'; ctx.shadowBlur=6; ctx.shadowOffsetY=1;
+  ctx.fillStyle='rgba(255,255,255,.9)'; roundRect(36,74,W-72,26,13); ctx.fill();
+  ctx.restore();
   ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=1.5; roundRect(36,74,W-72,26,13); ctx.stroke();
   const frac=Math.min(1,ts/max);
   if(frac>0){
-    ctx.fillStyle='#ffd97a'; roundRect(38,76,Math.max(12,(W-76)*frac),22,11); ctx.fill();
+    const pg=ctx.createLinearGradient(38,76,38,98);
+    pg.addColorStop(0,'#ffe79a'); pg.addColorStop(1,'#f0b84a');
+    ctx.fillStyle=pg; roundRect(38,76,Math.max(12,(W-76)*frac),22,11); ctx.fill();
+    // 进度条上的小亮点
+    ctx.fillStyle='rgba(255,255,255,.5)';
+    roundRect(40,78,Math.max(8,(W-80)*frac*.92),3,1.5); ctx.fill();
   }
   ctx.fillStyle='#8a6a20'; ctx.font='bold 12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('⭐ '+ts+' / '+max+' 星',W/2,87);
@@ -1397,8 +1459,10 @@ function drawMenu(){
   ctx.fillText(CH.icon+' '+CH.name,W/2,162);
   ctx.fillStyle='#a8bcb2'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(CH.desc,W/2,184);
-  // 关卡网格 5×2
+  // 关卡网格 5×2（卡片带柔和投影）
   const gx=12, gy=210, bw=68, bh=76, gap=14;
+  ctx.save();
+  ctx.shadowColor='rgba(120,180,160,.28)'; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
   for(let i=0;i<10;i++){
     const lv=state.menuPage*10+i+1;
     if(lv>LEVELS.length) break;
@@ -1406,7 +1470,7 @@ function drawMenu(){
     const x=gx+col*(bw+gap), y=gy+row*(bh+gap);
     const locked=lv>state.unlocked;
     const nextUp=!locked && !(state.starMap[lv]>0);   // 下一关待打 → 呼吸高亮
-    ctx.fillStyle= locked?'rgba(200,215,208,.5)': nextUp?'#fffbe8':'rgba(255,255,255,.9)';
+    ctx.fillStyle= locked?'rgba(200,215,208,.55)': nextUp?'#fffbe8':'rgba(255,255,255,.94)';
     roundRect(x,y,bw,bh,14); ctx.fill();
     if(nextUp){
       const pulse=.6+Math.sin(performance.now()/300)*.3;
@@ -1415,17 +1479,18 @@ function drawMenu(){
       ctx.strokeStyle= locked?'#c8d7d0':'#9fd0bc'; ctx.lineWidth=2;
     }
     roundRect(x,y,bw,bh,14); ctx.stroke();
-    ctx.fillStyle= locked?'#a8bcb2':'#3f8f77'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
+    ctx.fillStyle= locked?'#a8bcb2':'#2f7d66'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
     ctx.fillText(locked?'🔒':lv, x+bw/2, y+26);
     const st=state.starMap[lv]||0;
     ctx.font='12px "Segoe UI",system-ui,sans-serif';
     let s=''; for(let j=0;j<3;j++) s+= j<st?'★':'☆';
-    ctx.fillStyle= locked?'#c0cfc7':'#e8b84a';
+    ctx.fillStyle= locked?'#c0cfc7': st>0?'#f0b84a':'#d8cfb8';
     ctx.fillText(s, x+bw/2, y+50);
     const best=state.bestMap[lv]||0;
     ctx.fillStyle='#b8c9c1'; ctx.font='9px "Segoe UI",system-ui,sans-serif';
     ctx.fillText(best?('最佳 '+best):'', x+bw/2, y+65);
   }
+  ctx.restore();
   // 连胜徽章
   if(state.streak>=2){
     ctx.fillStyle='#ffb38a'; roundRect(W/2-88,392,176,34,17); ctx.fill();
@@ -1763,11 +1828,25 @@ function drawResult(){
   });
   for(const [btn,act] of resultButtons()){
     const label=btn.label || (btn.y===416 ? (btn.x<W/2?'重玩':'下一关') : '返回');
-    ctx.fillStyle= btn.label ? '#9fd0bc' : (btn.x<W/2 ? '#5aa88f':'#4caf93');
+    const primary = !btn.label;
+    // 主操作（重玩/下一关）渐变填充 + 投影，次要（返回/分享）玻璃质感
+    ctx.save();
+    if(primary){
+      const bg=ctx.createLinearGradient(0,btn.y,0,btn.y+btn.h);
+      bg.addColorStop(0,'#6fc7a5'); bg.addColorStop(1, btn.x<W/2?'#4caf93':'#3f9b80');
+      ctx.shadowColor='rgba(63,143,119,.4)'; ctx.shadowBlur=10; ctx.shadowOffsetY=3;
+      ctx.fillStyle=bg;
+    } else {
+      ctx.shadowColor='rgba(120,180,160,.3)'; ctx.shadowBlur=6; ctx.shadowOffsetY=1;
+      ctx.fillStyle='rgba(255,255,255,.92)';
+    }
     roundRect(btn.x,btn.y,btn.w,btn.h, btn.h>44?22:23); ctx.fill();
-    ctx.fillStyle= btn.label ? '#3f8f77' : '#fff';
+    ctx.restore();
+    ctx.strokeStyle= primary?'#2f7d66':'#9fd0bc'; ctx.lineWidth=primary?1.5:2;
+    roundRect(btn.x,btn.y,btn.w,btn.h, btn.h>44?22:23); ctx.stroke();
+    ctx.fillStyle= primary ? '#fff' : '#3f8f77';
     ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText(label,btn.x+btn.w/2,btn.y+btn.h/2);
+    ctx.fillText(label,btn.x+btn.w/2,btn.y+btn.h/2+1);
   }
   drawPopups();
 }
@@ -1776,12 +1855,20 @@ function drawPopups(){
   if(!state.popups.length) return;
   const p=state.popups[0];
   ctx.fillStyle='rgba(40,70,60,.45)'; ctx.fillRect(0,0,W,H);
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,.25)'; ctx.shadowBlur=20; ctx.shadowOffsetY=6;
   ctx.fillStyle='#fffdf5'; roundRect(60,210,W-120,200,24); ctx.fill();
+  ctx.restore();
   ctx.strokeStyle='#e8b84a'; ctx.lineWidth=3; roundRect(60,210,W-120,200,24); ctx.stroke();
+  // 顶部金色小装饰条
+  ctx.fillStyle='#ffd97a'; roundRect(86,222,W-172,4,2); ctx.fill();
   ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.save();
+  ctx.shadowColor='rgba(232,184,74,.5)'; ctx.shadowBlur=10;
   ctx.font='40px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(p.icon,W/2,258);
-  ctx.fillStyle='#3f8f77'; ctx.font='bold 19px "Segoe UI",system-ui,sans-serif';
+  ctx.restore();
+  ctx.fillStyle='#2f7d66'; ctx.font='bold 19px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(p.title,W/2,300);
   ctx.fillStyle='#7fb8a4'; ctx.font='14px "Segoe UI",system-ui,sans-serif';
   p.lines.forEach((ln,i)=>ctx.fillText(ln,W/2,330+i*22));
@@ -1821,7 +1908,7 @@ function frame(now){
 
 /* ---------------- 验证钩子 ---------------- */
 window.__GARDEN_TEST__ = {
-  version:'0.5',
+  version:'0.6',
   loadLevel(n){ state.mode='official'; state.level=n; buildLevel(n); state.screen='game'; },
   loadCustomDef(def){ state.mode='custom'; state.customDef=def; buildCustom(def); state.screen='game'; },
   state(){ return { screen:state.screen, mode:state.mode, level:state.level, shotsLeft:state.shotsLeft, score:state.score, bubbles:Object.keys(state.cells).length, won:state.won, stars:state.stars }; },
@@ -1932,14 +2019,26 @@ window.__GARDEN_TEST__ = {
 };
 
 /* ---------------- 启动 ---------------- */
+/* 手机端适配：窄屏满宽 + 高清 DPR（上限2避免性能浪费）+ 超宽屏限高 */
 function fit(){
-  const s=Math.min(innerWidth/W,innerHeight/H)*.96;
-  canvas.style.width=(W*s)+'px'; canvas.style.height=(H*s)+'px';
-  const dpr=devicePixelRatio||1;
+  const vw=innerWidth, vh=innerHeight;
+  const portrait = vh>vw;
+  let s;
+  if(portrait && vw<W){           // 竖屏手机：宽度铺满，垂直居中（高度通常够）
+    s=vw/W;
+  } else {
+    s=Math.min(vw/W, vh/H);
+  }
+  const dpr=Math.min(devicePixelRatio||1, 2);   // 上限2：画面清晰且省性能
+  canvas.style.width=Math.round(W*s)+'px';
+  canvas.style.height=Math.round(H*s)+'px';
   canvas.width=Math.round(W*dpr); canvas.height=Math.round(H*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
+  // 竖屏窄机把画布上移一点，视觉重心更居中
+  document.getElementById('stage').style.alignItems = (portrait && vh > H*s*1.15) ? 'flex-start' : 'center';
 }
 addEventListener('resize',fit);
+addEventListener('orientationchange',()=>setTimeout(fit,120));
 document.addEventListener('visibilitychange',()=>{ if(document.hidden) save(); });
 load(); fit();
 document.getElementById('boot').remove();
