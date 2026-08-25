@@ -572,11 +572,11 @@ function physicsSettle(){
     if(!cell) continue;
     delCell(fr,fc); dropped++; state.score+=20;
     if(cell.t==='S' || cell.t==='B'){
-      // 重物：高抛后超重猛砸（水平甩出 + 炸弹最重 1000 → 抛物线又高又沉，轨迹震撼）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*300, vy:-170-Math.random()*120, grav:cell.t==='B'?1000:850, cell});
+      // 重物：冲天高抛后陨石式猛砸（炸弹 1300 / 石头 1100，砸地惊天动地）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*340, vy:-170-Math.random()*120, grav:cell.t==='B'?1300:1100, cell});
     } else {
-      // 轻泡：强劲浮力快速上飘出屏幕（轻如气泡，一挣脱就猛往上冲）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-140-Math.random()*80, grav:-200, cell});
+      // 轻泡：冲天炮式上浮（浮力强劲，一挣脱就嗖地冲出屏幕）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-200-Math.random()*100, grav:-320, cell});
     }
   }
   return dropped;
@@ -1464,7 +1464,7 @@ function drawGame(){
     t.t+=1/60;
     ctx.globalAlpha=Math.max(0,1-t.t/t.life)*.8;
     ctx.fillStyle=t.color;
-    ctx.beginPath(); ctx.arc(t.x,t.y,3.2*(1-t.t/t.life)+.6,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(t.x,t.y,(t.r||3.2)*(1-t.t/t.life)+.6,0,Math.PI*2); ctx.fill();
     ctx.globalAlpha=1;
     return t.t<t.life;
   });
@@ -1517,10 +1517,10 @@ function drawGame(){
     f.y+=f.vy/60;
     const heavy = (f.grav||0)>0;
     if(heavy){
-      f.rot=(f.rot||0)+.3;   // 快速翻滚（抛物线旋转醒目）
-      // 抛物线残影：沿路径留下渐隐的同类泡泡（轨迹可视化）
-      if(!state.reduceMotion && Math.random()<.85){
-        state.trail.push({x:f.x, y:f.y, t:0, life:.3, color: f.cell.t==='B'?'#6a707a':'#9aa0a8'});
+      f.rot=(f.rot||0)+.45;   // 快速翻滚（陨石旋转醒目）
+      // 抛物线残影：沿路径留下渐隐的同类泡泡（大号残影，轨迹可视化）
+      if(!state.reduceMotion && Math.random()<.95){
+        state.trail.push({x:f.x, y:f.y, t:0, life:.32, r:4.6, color: f.cell.t==='B'?'#6a707a':'#9aa0a8'});
       }
       // 尘土粒子（更密更重，坠落感十足）
       if(!state.reduceMotion && Math.random()<.85){
@@ -1534,11 +1534,18 @@ function drawGame(){
           vx:(Math.random()-.5)*15, vy:140+Math.random()*160, t:0, life:.28,
           color:'rgba(255,255,255,.65)', r:1+Math.random()*1.4});
       }
-      // 落地冲击波（y 超出底部前一刻）
+      // 落地冲击波（y 超出底部前一刻）：大爆炸 + 强震屏 + 尘土喷溅
       if(f.y>H-R && !f._landed){
         f._landed=true;
         spawnExplosion(f.x, H-R);
-        state.shakeT=Math.max(state.shakeT,.25);
+        state.shakeT=Math.max(state.shakeT,.38);
+        if(!state.reduceMotion){
+          for(let k=0;k<8;k++){
+            state.particles.push({x:f.x+(Math.random()-.5)*30, y:H-R-5+Math.random()*8,
+              vx:(Math.random()-.5)*260, vy:-80-Math.random()*140, t:0, life:.5,
+              color:'rgba(200,185,155,.8)', r:2.5+Math.random()*3});
+          }
+        }
       }
       ctx.save(); ctx.translate(f.x,f.y); ctx.rotate(f.rot);
       drawCellShape(0,0,R-2,f.cell,.95);
@@ -1547,12 +1554,12 @@ function drawGame(){
       // 轻泡上飘：明显摇摆 + 呼吸缩放 + 同色残影 + 上升气泡（轨迹醒目）
       const sway=Math.sin(f.y*.03+(f.vx||0)*.1)*9;
       const sc=1+Math.sin(f.y*.1)*.06;
-      // 上飘残影：渐隐圆点连成上升轨迹线（与泡泡同色，一眼可见）
+      // 上飘残影：渐隐圆点连成上升轨迹线（大号同色残影，一眼可见）
       if(!state.reduceMotion && Math.random()<.9){
         const _t=f.cell?f.cell.t:0;
         const _col=typeof _t==='number'?PALETTE[_t%PALETTE.length].main
           :_t==='R'?'#e8e0ff':_t==='L'?'#ffd97a':_t==='I'?'#bfe6fa':'#9aa0a8';
-        state.trail.push({x:f.x+sway+(Math.random()-.5)*6, y:f.y, t:0, life:.3, color:_col});
+        state.trail.push({x:f.x+sway+(Math.random()-.5)*6, y:f.y, t:0, life:.34, r:4.2, color:_col});
       }
       // 上升气泡粒子（更密更快，强化上飘感）
       if(!state.reduceMotion && Math.random()<.9){
