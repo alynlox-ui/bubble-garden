@@ -1331,12 +1331,10 @@ function drawAim(){
   if(!state.aim.valid || state.flying) return;
   let dx=state.aim.x-state.shooter.x, dy=state.aim.y-state.shooter.y; const len=Math.hypot(dx,dy); if(len<1) return;
   dx/=len; dy/=len; if(dy>-0.15) return;
-  let x=state.shooter.x,y=state.shooter.y, vx=dx*SPEED, vy=dy*SPEED;
+  let x=state.shooter.x,y=state.shooter.y, vx=dx, vy=dy;
   ctx.fillStyle='rgba(90,168,143,.55)';
-  const dt=14/SPEED;
   for(let i=0;i<40;i++){
-    x+=vx*dt; y+=vy*dt;
-    vy+=BUOY*dt;   // 浮力加速度（与真实飞行一致）
+    x+=vx*14; y+=vy*14;
     if(x<R){x=R;vx=-vx;} if(x>W-R){x=W-R;vx=-vx;}
     if(y-R<=BOARD_TOP) break;
     let stop=false;
