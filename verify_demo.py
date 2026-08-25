@@ -899,7 +899,7 @@ def main() -> int:
         evaluate(ws, "window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0);window.__GARDEN_TEST__.setCell(1,3,'S')")
         res_s = evaluate(ws, "window.__GARDEN_TEST__.resolve(0,0)")
         anim_s = evaluate(ws, "window.__GARDEN_TEST__.fallingAnims()")
-        check("stone_parabola", res_s["dropped"] == 1 and len(anim_s) >= 1 and anim_s[0]["grav"] == 900
+        check("stone_parabola", res_s["dropped"] == 1 and len(anim_s) >= 1 and anim_s[0]["grav"] == 430
               and anim_s[0]["vy"] < 0,   # 初速向上 → 抛物线
               {"dropped": res_s["dropped"], "anims": anim_s})
 
