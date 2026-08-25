@@ -45,7 +45,7 @@ const ED_TOP = 116;
 const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
-const SPEED = 980, BUOY = -250;   // 浮力加速度（向上，使飞行轨迹呈上飘弧线）
+const SPEED = 980, BUOY = -1100;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
 const BOMB_RAD = 2.6 * R;
 
 const PALETTE = [
@@ -575,8 +575,8 @@ function physicsSettle(){
       // 重物：抛物线抛出（高抛 + 水平掷出 + 慢重力 → 轨迹清晰可辨）
       state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*220, vy:-170-Math.random()*120, grav:430, cell});
     } else {
-      // 轻泡：向上飘出屏幕（浮力向上，慢速优雅）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-30-Math.random()*30, grav:-35, cell});
+      // 轻泡：向上飘出屏幕（浮力向上，快速明显上飘）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-70-Math.random()*60, grav:-110, cell});
     }
   }
   return dropped;
@@ -1441,8 +1441,8 @@ function drawGame(){
     if(floatingKeys.has(kk)) continue;   // 补位动画中的格子暂不绘制
     const [r,c]=parseKey(kk);
     const appear = Math.min(1, Math.max(0,(intro*10-r)/1.2));
-    // 全场上浮倾向：所有泡泡微弱正弦浮动（像在水里，1.5px 不影响逻辑）
-    const floatDrift = Math.sin(t*0.6 + r*1.2 + c*0.7) * 1.5;
+    // 全场上浮倾向：所有泡泡正弦浮动（像在水里，4px 纯视觉不影响逻辑）
+    const floatDrift = Math.sin(t*0.8 + r*1.2 + c*0.7) * 4;
     drawCellShape(cellX(r,c), cellY(r)+floatDrift, R-1, getCell(r,c), appear);
     k++;
   }
@@ -1538,13 +1538,21 @@ function drawGame(){
       drawCellShape(0,0,R-2,f.cell,.95);
       ctx.restore();
     } else {
-      // 轻泡上飘：带摇摆和缩放（缓慢浮起）
-      const sway=Math.sin(f.y*.03+(f.vx||0)*.1)*5;
-      const sc=1+Math.sin(f.y*.1)*.04;
-      if(!state.reduceMotion && Math.random()<.5){
+      // 轻泡上飘：明显摇摆 + 呼吸缩放 + 同色残影 + 上升气泡（轨迹醒目）
+      const sway=Math.sin(f.y*.03+(f.vx||0)*.1)*9;
+      const sc=1+Math.sin(f.y*.1)*.06;
+      // 上飘残影：渐隐圆点连成上升轨迹线（与泡泡同色，一眼可见）
+      if(!state.reduceMotion && Math.random()<.9){
+        const _t=f.cell?f.cell.t:0;
+        const _col=typeof _t==='number'?PALETTE[_t%PALETTE.length].main
+          :_t==='R'?'#e8e0ff':_t==='L'?'#ffd97a':_t==='I'?'#bfe6fa':'#9aa0a8';
+        state.trail.push({x:f.x+sway+(Math.random()-.5)*6, y:f.y, t:0, life:.3, color:_col});
+      }
+      // 上升气泡粒子（更密更快，强化上飘感）
+      if(!state.reduceMotion && Math.random()<.9){
         state.particles.push({x:f.x+sway+(Math.random()-.5)*10, y:f.y+(Math.random()-.5)*10,
-          vx:(Math.random()-.5)*20, vy:-30-Math.random()*40, t:0, life:.35,
-          color:'rgba(255,255,255,.85)', r:1.4+Math.random()*1.2});
+          vx:(Math.random()-.5)*20, vy:-70-Math.random()*70, t:0, life:.4,
+          color:'rgba(255,255,255,.9)', r:1.4+Math.random()*1.2});
       }
       ctx.save(); ctx.translate(f.x+sway,f.y); ctx.scale(sc,sc);
       drawCellShape(0,0,R-2,f.cell,.95);
