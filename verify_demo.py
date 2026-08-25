@@ -126,7 +126,7 @@ def main() -> int:
         check("hook_ready", ready)
         if not ready:
             raise RuntimeError("__GARDEN_TEST__ not exposed")
-        check("version_v06", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.6")
+        check("version_v07", evaluate(ws, "window.__GARDEN_TEST__.version") == "0.7")
 
         # 2) 画布尺寸
         size = evaluate(ws, "({w:document.querySelector('#game').width,h:document.querySelector('#game').height})")
@@ -145,12 +145,14 @@ def main() -> int:
               {"before": shots_before, "after": shots_after})
         evaluate(ws, "window.__GARDEN_TEST__.startGame()")
 
-        # 3) 基础消除仍正常：3 同色 + 悬空坠落
+        # 3) 基础消除 + v0.7 物理：悬空轻泡上飘补位（不消除，保留在棋盘）
         evaluate(ws, "window.__GARDEN_TEST__.loadLevel(1)")
         evaluate(ws, "window.__GARDEN_TEST__.startGame()")
         evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0);window.__GARDEN_TEST__.setCell(1,1,1)")
         res = evaluate(ws, "window.__GARDEN_TEST__.resolve(0,0)")
-        check("basic_pop_and_drop", res["popped"] == 3 and res["dropped"] == 1, res)
+        cells = evaluate(ws, "window.__GARDEN_TEST__.getCells()")
+        check("basic_pop_and_float_up", res["popped"] == 3 and res["dropped"] == 0 and len(cells) == 1,
+              {"popped": res["popped"], "dropped": res["dropped"], "cells": cells})
 
         # 4) 彩虹泡泡：与多数邻色成组
         evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,'R');window.__GARDEN_TEST__.setCell(0,3,1)")
@@ -373,7 +375,25 @@ def main() -> int:
               for(const [nr,nc] of neighbors(r,c)){ const nk=key(nr,nc); if(damaged[nk]) continue;
                 const nb=b[nk]; if(nb&&nb.t==='I'){ damaged[nk]=1; nb.hp--;
                   if(nb.hp<=0){ delete b[nk]; popped++; } } } }
+            // v0.7 镜像物理：轻泡上飘补位（保留），重物坠落（消除）
             let dropped=0;
+            let moved2=true, guard2=0;
+            while(moved2 && guard2<12){
+              moved2=false; guard2++;
+              const fl=findFloating(b);
+              if(!fl.length) break;
+              for(const [fr,fc] of fl){
+                const cell=b[key(fr,fc)]; if(!cell) continue;
+                if(cell.t==='S'||cell.t==='B') continue;
+                for(let ur=fr-1; ur>=0; ur--){
+                  let cand=null;
+                  for(const cc of [fc-1,fc,fc+1]){
+                    if(cc>=0&&cc<colsInRow(ur)&&b[key(ur,cc)]===undefined){ cand=[ur,cc]; break; }
+                  }
+                  if(cand){ b[key(cand[0],cand[1])]=cell; delete b[key(fr,fc)]; moved2=true; break; }
+                }
+              }
+            }
             for(const [fr,fc] of findFloating(b)){ delete b[key(fr,fc)]; dropped++; }
             return [popped,dropped];
           }
@@ -839,6 +859,74 @@ def main() -> int:
         lost2 = evaluate(ws, "window.__GARDEN_TEST__.state()")
         check("loss_encouragement", lost2["won"] is False and isinstance(enc, str) and len(enc) >= 4,
               {"encourage": enc, "state": lost2})
+
+        # ---- v0.7 物理系统 ----
+        # 23) 发射炮口可拖动：位置更新 + 边界钳制
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(5);window.__GARDEN_TEST__.startGame()")
+        p0 = evaluate(ws, "window.__GARDEN_TEST__.shooterPos()")
+        p1 = evaluate(ws, "window.__GARDEN_TEST__.dragShooterTo(300, 560)")
+        p2 = evaluate(ws, "window.__GARDEN_TEST__.dragShooterTo(0, 0)")   # 越界 → 钳制
+        p3 = evaluate(ws, "window.__GARDEN_TEST__.dragShooterTo(420, 640)")  # 越界 → 钳制
+        check("shooter_draggable", p1["x"] == 300 and p1["y"] == 560
+              and p2["x"] == 40 and p2["y"] == 480
+              and p3["x"] == 380 and p3["y"] == 604,
+              {"p0": p0, "p1": p1, "p2": p2, "p3": p3})
+
+        # 23b) 拖动炮口后发射起点跟随（射击仍可用，瞄准线为直线从炮口出发）
+        evaluate(ws, "window.__GARDEN_TEST__.dragShooterTo(210, 560)")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll();window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0)")
+        evaluate(ws, "window.__GARDEN_TEST__.simulateShot(0,3,0)")
+        st_sh = evaluate(ws, "window.__GARDEN_TEST__.state()")
+        check("shooter_flow_preserved", st_sh["won"] is True and evaluate(ws, "window.__GARDEN_TEST__.shooterPos().x") == 210,
+              {"state": st_sh})
+
+        # 24) 悬空轻泡上飘补位：消除后悬空普通泡不消失，自动上飘到空位
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(2);window.__GARDEN_TEST__.startGame()")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll()")
+        # 顶行3同色 + 第二行一个悬空泡（消除后它会补位到顶行空位）
+        evaluate(ws, "window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0);window.__GARDEN_TEST__.setCell(1,3,5)")
+        res_up = evaluate(ws, "window.__GARDEN_TEST__.resolve(0,0)")
+        cells_up = evaluate(ws, "window.__GARDEN_TEST__.getCells()")
+        float_cnt = evaluate(ws, "window.__GARDEN_TEST__.floaters()")
+        check("float_up_reposition", res_up["dropped"] == 0 and len(cells_up) == 1
+              and float_cnt >= 1 and cells_up[0]["t"] == 5,
+              {"popped": res_up["popped"], "dropped": res_up["dropped"], "cells": cells_up, "floaters": float_cnt})
+        # 补位后泡泡保留且可继续玩（不因补位触发卡死）
+
+        # 25) 重物抛物线：悬空石头/炸弹不补位，以抛物线轨迹坠落
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(3);window.__GARDEN_TEST__.startGame()")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll()")
+        evaluate(ws, "window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0);window.__GARDEN_TEST__.setCell(1,3,'S')")
+        res_s = evaluate(ws, "window.__GARDEN_TEST__.resolve(0,0)")
+        anim_s = evaluate(ws, "window.__GARDEN_TEST__.fallingAnims()")
+        check("stone_parabola", res_s["dropped"] == 1 and len(anim_s) >= 1 and anim_s[0]["grav"] == 900
+              and anim_s[0]["vy"] < 0,   # 初速向上 → 抛物线
+              {"dropped": res_s["dropped"], "anims": anim_s})
+
+        # 25b) 轻泡上飘补位（强验证）：悬空轻泡优先补位保留，不吞泡不消失
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(3);window.__GARDEN_TEST__.startGame()")
+        evaluate(ws, "window.__GARDEN_TEST__.clearAll()")
+        # 构造：顶行3同色 + 下方一列 4 个悬空轻泡（消除后全部补位保留）
+        evaluate(ws, "window.__GARDEN_TEST__.setCell(0,0,0);window.__GARDEN_TEST__.setCell(0,1,0);window.__GARDEN_TEST__.setCell(0,2,0)")
+        for rr, cc in ((1, 2), (2, 2), (3, 2)):
+            evaluate(ws, f"window.__GARDEN_TEST__.setCell({rr},{cc},5)")
+        evaluate(ws, "window.__GARDEN_TEST__.resolve(0,0)")
+        floaters_mass = evaluate(ws, "window.__GARDEN_TEST__.floaters()")
+        cells_mass = evaluate(ws, "window.__GARDEN_TEST__.getCells()")
+        # 4 个轻泡应全部补位保留在棋盘（dropped==0），补位动画已触发
+        check("mass_float_reposition", len(cells_mass) == 3 and floaters_mass >= 1
+              and all(c["t"] == 5 for c in cells_mass),
+              {"cells": cells_mass, "floaters": floaters_mass})
+
+        # 26) 拖动手势不误发射：点击炮口并松开不消耗步数
+        evaluate(ws, "window.__GARDEN_TEST__.loadLevel(5);window.__GARDEN_TEST__.startGame()")
+        sp = evaluate(ws, "window.__GARDEN_TEST__.shooterPos()")
+        s_before = evaluate(ws, "window.__GARDEN_TEST__.state().shotsLeft")
+        evaluate(ws, f"window.__GARDEN_TEST__.clickAt({sp['x']}, {sp['y']})")
+        s_after = evaluate(ws, "window.__GARDEN_TEST__.state().shotsLeft")
+        dragging_after = evaluate(ws, "window.__GARDEN_TEST__.draggingShooterState()")
+        check("drag_shooter_no_shot", s_before == s_after and dragging_after is False,
+              {"before": s_before, "after": s_after})
 
         # 18) 截图：菜单（含特殊泡泡图例 + 工坊入口）
         evaluate(ws, "location.reload()")
