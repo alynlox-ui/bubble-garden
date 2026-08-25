@@ -572,11 +572,11 @@ function physicsSettle(){
     if(!cell) continue;
     delCell(fr,fc); dropped++; state.score+=20;
     if(cell.t==='S' || cell.t==='B'){
-      // 重物：抛物线抛出（高抛 + 水平掷出 + 慢重力 → 轨迹清晰可辨）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*220, vy:-170-Math.random()*120, grav:430, cell});
+      // 重物：高抛后超重猛砸（水平甩出 + 炸弹最重 1000 → 抛物线又高又沉，轨迹震撼）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*300, vy:-170-Math.random()*120, grav:cell.t==='B'?1000:850, cell});
     } else {
-      // 轻泡：向上飘出屏幕（浮力向上，快速明显上飘）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-70-Math.random()*60, grav:-110, cell});
+      // 轻泡：强劲浮力快速上飘出屏幕（轻如气泡，一挣脱就猛往上冲）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-140-Math.random()*80, grav:-200, cell});
     }
   }
   return dropped;
@@ -1522,11 +1522,17 @@ function drawGame(){
       if(!state.reduceMotion && Math.random()<.85){
         state.trail.push({x:f.x, y:f.y, t:0, life:.3, color: f.cell.t==='B'?'#6a707a':'#9aa0a8'});
       }
-      // 尘土粒子
+      // 尘土粒子（更密更重，坠落感十足）
+      if(!state.reduceMotion && Math.random()<.85){
+        state.particles.push({x:f.x+(Math.random()-.5)*14, y:f.y+(Math.random()-.5)*14,
+          vx:(Math.random()-.5)*90, vy:90+Math.random()*110, t:0, life:.45,
+          color:'rgba(210,198,175,.85)', r:1.8+Math.random()*2.2});
+      }
+      // 下坠风线：急促白色气流沿轨迹向下窜，强化沉重感
       if(!state.reduceMotion && Math.random()<.7){
-        state.particles.push({x:f.x+(Math.random()-.5)*12, y:f.y+(Math.random()-.5)*12,
-          vx:(Math.random()-.5)*70, vy:50+Math.random()*50, t:0, life:.4,
-          color:'rgba(190,180,160,.75)', r:1.8+Math.random()*2});
+        state.particles.push({x:f.x+(Math.random()-.5)*18, y:f.y-8+Math.random()*16,
+          vx:(Math.random()-.5)*15, vy:140+Math.random()*160, t:0, life:.28,
+          color:'rgba(255,255,255,.65)', r:1+Math.random()*1.4});
       }
       // 落地冲击波（y 超出底部前一刻）
       if(f.y>H-R && !f._landed){
@@ -1551,7 +1557,7 @@ function drawGame(){
       // 上升气泡粒子（更密更快，强化上飘感）
       if(!state.reduceMotion && Math.random()<.9){
         state.particles.push({x:f.x+sway+(Math.random()-.5)*10, y:f.y+(Math.random()-.5)*10,
-          vx:(Math.random()-.5)*20, vy:-70-Math.random()*70, t:0, life:.4,
+          vx:(Math.random()-.5)*20, vy:-100-Math.random()*100, t:0, life:.45,
           color:'rgba(255,255,255,.9)', r:1.4+Math.random()*1.2});
       }
       ctx.save(); ctx.translate(f.x+sway,f.y); ctx.scale(sc,sc);
