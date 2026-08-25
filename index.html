@@ -45,7 +45,7 @@ const ED_TOP = 116;
 const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
-const SPEED = 980;
+const SPEED = 980, BUOY = -250;   // 浮力加速度（向上，使飞行轨迹呈上飘弧线）
 const BOMB_RAD = 2.6 * R;
 
 const PALETTE = [
@@ -697,6 +697,7 @@ function afterSpecialHit(){ settleLanding(0); }
 function stepFlying(dt){
   const f=state.flying; if(!f) return;
   f.x+=f.vx*dt; f.y+=f.vy*dt;
+  f.vy+=BUOY*dt;    // 浮力加速度：向上飘（让飞行轨迹呈弧线）
   // 飞行拖尾：每帧留 2 个渐隐粒子（物理轨迹可视化）
   if(!state.reduceMotion){
     for(let i=0;i<2;i++){
@@ -1330,10 +1331,12 @@ function drawAim(){
   if(!state.aim.valid || state.flying) return;
   let dx=state.aim.x-state.shooter.x, dy=state.aim.y-state.shooter.y; const len=Math.hypot(dx,dy); if(len<1) return;
   dx/=len; dy/=len; if(dy>-0.15) return;
-  let x=state.shooter.x,y=state.shooter.y,vx=dx,vy=dy;
+  let x=state.shooter.x,y=state.shooter.y, vx=dx*SPEED, vy=dy*SPEED;
   ctx.fillStyle='rgba(90,168,143,.55)';
+  const dt=14/SPEED;
   for(let i=0;i<40;i++){
-    x+=vx*14; y+=vy*14;
+    x+=vx*dt; y+=vy*dt;
+    vy+=BUOY*dt;   // 浮力加速度（与真实飞行一致）
     if(x<R){x=R;vx=-vx;} if(x>W-R){x=W-R;vx=-vx;}
     if(y-R<=BOARD_TOP) break;
     let stop=false;
