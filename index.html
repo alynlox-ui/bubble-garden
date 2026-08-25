@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>泡泡花园 · Bubble Garden v0.6</title>
+<title>泡泡花园 · Bubble Garden v0.7</title>
 <style>
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);
             overscroll-behavior:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
@@ -21,7 +21,7 @@
 <div id="stage"><canvas id="game"></canvas></div><script>
 "use strict";
 /* ============================================================
-   泡泡花园 Bubble Garden v0.6
+   泡泡花园 Bubble Garden v0.7
    泡泡射击 + 5 章节 · 50 官方关卡 + 创意工坊（自制关卡）
    上瘾系统：连胜加成 / 最佳纪录 / 章节通关奖励 / 总星数进度
    v0.4：新手教程关 / 新泡泡介绍弹窗 / 工坊合规校验 / 难度下调
@@ -160,14 +160,15 @@ function startDaily(seedOverride){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
+  state.floaters=[];
   initQueue();
   state.screen='game';
 }
-/* 限步/三星目标表：由「实测可通关」仿真生成（50关 × 80次真实队列模拟）
+/* 限步/三星目标表：由「实测可通关」仿真生成（50关 × 50次真实队列模拟，v0.7 物理：悬空轻泡上飘补位）
    限步 = ceil(P90 × 1.3) + 3（前 90% 真实对局发数再留 30%+3 余量），
    三星 = ceil(P50 × 1.15) + 1（中等偏优发挥即可三星），均单调不减、三星 ≤ 限步-3 */
-const SHOTS = [11,14,16,16,16,16,16,16,19,19,19,19,19,19,19,20,20,20,20,20,22,24,29,29,29,29,29,29,35,35,37,37,37,37,37,37,37,37,37,37,37,37,37,40,40,40,49,49,49,49];
-const PARS  = [8,11,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,14,14,18,18,18,18,18,22,22,23,23,23,23,23,23,23,23,23,23,24,24,24,24,24,27,28,28,28,28];
+const SHOTS = [11,14,16,16,16,20,20,20,20,20,20,20,20,20,23,26,26,26,26,26,26,28,32,32,32,32,32,32,44,44,44,44,44,44,44,44,44,44,44,44,44,44,44,48,48,48,53,53,53,53];
+const PARS  = [8,11,13,13,13,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,20,20,20,20,20,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,31,31,33,34,34,34,34];
 const LEVELS = (()=>{
   const arr=[];
   let prevCount=0;
@@ -228,6 +229,9 @@ const state = {
   themeOwned:['meadow'], themeCurrent:'meadow',             // 主题屋（持久化）
   totalPoppedEver:0, maxComboEver:0,                        // 生涯累计（持久化，供成就）
   encourage:'',        // 失败鼓励语
+  shooter:{x:W/2, y:H-84},                                  // 发射炮口（可拖动）
+  draggingShooter:false,                                     // 是否正在拖炮口
+  floaters:[],                                               // 上飘补位动画 {fx,fy,tx,ty,cell,t}
   lastBonus:0, chapterClear:-1, isNewBest:false,
   reduceMotion:false,
   shakeT:0,
@@ -308,6 +312,7 @@ function buildLevel(n){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
+  state.floaters=[];
   // 首次登场的新属性泡泡 → 屏幕弹介绍（已看过的类型不再打扰）
   if(L.ice) maybeIntro('I');
   if(L.stone) maybeIntro('S');
@@ -337,6 +342,7 @@ function buildCustom(def){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
+  state.floaters=[];
   initQueue();
 }
 function presentNormalColors(){
@@ -515,16 +521,57 @@ function popGroup(keys){
       }
     }
   }
-  // 悬空坠落
-  let dropped=0;
-  for(const [fr,fc] of findFloating()){
-    state.falling.push({x:cellX(fr,fc), y:cellY(fr), vy:0, cell:getCell(fr,fc)});
-    delCell(fr,fc); dropped++; state.score+=20;
-  }
+  // v0.7 物理：悬空泡泡——轻泡上飘补位（保留），石头/炸弹抛物线坠落（消除）
+  const dropped = physicsSettle();
   if(popped>0) sfxPop(Math.min(popped,6));
   sanitizeQueue();
   checkEnd();
   return {popped,dropped};
+}
+/* ---------- v0.7 物理引擎：悬空泡泡行为 ----------
+   轻泡泡（普通色/R/L/I）：失去支撑后上飘，向上找空格补位（保留在棋盘）；
+     若上方完全堵死无法补位，则持续上飘出屏（消除 +20 分）。
+   重泡泡（石头 S/炸弹 B）：不补位，抛物线抛出坠落（消除 +20 分）。 */
+function physicsSettle(){
+  // 第一遍：轻泡上飘补位（多轮直到稳定）
+  let moved=true, guard=0;
+  while(moved && guard<12){
+    moved=false; guard++;
+    const floating=findFloating();
+    if(!floating.length) break;
+    for(const [r,c] of floating){
+      const cell=getCell(r,c);
+      if(!cell) continue;
+      if(cell.t==='S' || cell.t==='B') continue;      // 重物不补位
+      for(let ur=r-1; ur>=0; ur--){
+        let cand=null;
+        for(const cc of [c-1,c,c+1]){
+          if(cc>=0 && cc<colsInRow(ur) && getCell(ur,cc)===undefined){ cand=[ur,cc]; break; }
+        }
+        if(cand){
+          state.floaters.push({fx:cellX(r,c), fy:cellY(r), tx:cellX(cand[0],cand[1]), ty:cellY(cand[0]), cell, t:0});
+          delCell(r,c); setCellRaw(cand[0],cand[1],cell);
+          moved=true;
+          break;
+        }
+      }
+    }
+  }
+  // 第二遍：仍未补位的（轻泡堵死 / 重物）→ 物理动画离开棋盘并消除
+  let dropped=0;
+  for(const [fr,fc] of findFloating()){
+    const cell=getCell(fr,fc);
+    if(!cell) continue;
+    delCell(fr,fc); dropped++; state.score+=20;
+    if(cell.t==='S' || cell.t==='B'){
+      // 重物：抛物线抛出（水平初速 + 上抛初速，受重力）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*180, vy:-110-Math.random()*70, grav:900, cell});
+    } else {
+      // 轻泡：向上飘出屏幕（浮力向上加速）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*40, vy:-50-Math.random()*40, grav:-70, cell});
+    }
+  }
+  return dropped;
 }
 function resolveShot(r,c){
   const cell=getCell(r,c);
@@ -630,11 +677,11 @@ function findSnapCell(px,py){
 function shoot(){
   if(state.screen!=='game' || !state.ready || state.flying || state.shotsLeft<=0) return;
   if(!state.aim.valid) return;
-  let dx=state.aim.x-SX, dy=state.aim.y-SY;
+  let dx=state.aim.x-state.shooter.x, dy=state.aim.y-state.shooter.y;
   const len=Math.hypot(dx,dy); if(len<1) return;
   dx/=len; dy/=len;
   if(dy>-0.15) return;
-  state.flying={x:SX,y:SY,vx:dx*SPEED,vy:dy*SPEED,color:state.cur};
+  state.flying={x:state.shooter.x,y:state.shooter.y,vx:dx*SPEED,vy:dy*SPEED,color:state.cur};
   state.shotsLeft--;
   sfxShoot();
 }
@@ -700,6 +747,7 @@ function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({
   dailyBest:state.dailyBest, dailyDates:state.dailyDates, ach:state.ach,
   themeOwned:state.themeOwned, themeCurrent:state.themeCurrent,
   totalPoppedEver:state.totalPoppedEver, maxComboEver:state.maxComboEver,
+  shooter:state.shooter,
 })); }catch(e){} }
 function load(){ try{
   const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'{}');
@@ -716,6 +764,8 @@ function load(){ try{
   state.themeOwned=Array.isArray(d.themeOwned)&&d.themeOwned.length?d.themeOwned:['meadow'];
   state.themeCurrent=THEMES.some(t=>t.id===d.themeCurrent)?d.themeCurrent:'meadow';
   state.totalPoppedEver=d.totalPoppedEver||0; state.maxComboEver=d.maxComboEver||0;
+  const sh=d.shooter||{};
+  state.shooter={ x:Math.max(40,Math.min(W-40, sh.x||W/2)), y:Math.max(H-160,Math.min(H-36, sh.y||H-84)) };
 }catch(e){} }
 
 /* ---------------- 创意工坊 ---------------- */
@@ -810,17 +860,24 @@ function menuFeatureBtns(){
 /* ---------------- 输入 ---------------- */
 function canvasXY(e){ const r=canvas.getBoundingClientRect(); return { x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height) }; }
 function inBox(p,b){ return p.x>=b.x && p.x<=b.x+b.w && p.y>=b.y && p.y<=b.y+b.h; }
-function updateAim(p){ if(!state.ready) return; state.aim.valid = p.y-SY < -10; state.aim.x=p.x; state.aim.y=p.y; }
+function updateAim(p){ if(!state.ready) return; state.aim.valid = p.y-state.shooter.y < -10; state.aim.x=p.x; state.aim.y=p.y; }
 
 canvas.addEventListener('pointerdown', e=>{ e.preventDefault(); ac(); handleDown(canvasXY(e)); });
 canvas.addEventListener('pointermove', e=>{
   const p=canvasXY(e);
   if(state.screen==='game' && state.introConsumed) return;   // 开启手势中的移动不激活瞄准
+  if(state.screen==='game' && state.draggingShooter){
+    // 拖动炮口：限制在底部活动区（不碰到棋盘与边缘）
+    state.shooter.x=Math.max(40, Math.min(W-40, p.x));
+    state.shooter.y=Math.max(H-160, Math.min(H-36, p.y));
+    state.aim.valid=false;
+    return;
+  }
   if(state.screen==='game') updateAim(p);
   if(state.screen==='editor' && state.editor.dragging) edPaint(p.x,p.y);
 });
 canvas.addEventListener('pointerup', e=>{ e.preventDefault(); handleUp(canvasXY(e)); });
-canvas.addEventListener('pointercancel', ()=>{ state.editor.dragging=false; });
+canvas.addEventListener('pointercancel', ()=>{ state.editor.dragging=false; state.draggingShooter=false; });
 canvas.addEventListener('contextmenu', e=>e.preventDefault());
 
 function menuGridHit(p){
@@ -964,7 +1021,7 @@ function handleDown(p){
   if(state.screen==='game'){
     if(inSound(p)){ toggleMute(); return; }
     if(inReduce(p)){ toggleReduce(); return; }
-    if(inBox(p,SWAP_BTN)){
+    if(inBox(p,swapBtn())){
       if(state.flying){ toast('泡泡飞行中不能换'); return; }
       if(state.swapsLeft<=0){ toast('本关换泡次数已用完'); return; }
       const first=state.queue[0];
@@ -975,12 +1032,24 @@ function handleDown(p){
       return;
     }
     if(inBack(p)){ state.screen= state.mode==='test' ? 'editor' : state.mode==='custom' ? 'custom' : state.mode==='daily' ? 'daily' : 'menu'; return; }
+    // 按住炮口区域 → 进入拖动模式（移动吐出点），不瞄准
+    const ddx=p.x-state.shooter.x, ddy=p.y-state.shooter.y;
+    if(ddx*ddx+ddy*ddy <= 46*46 && !state.flying){
+      state.draggingShooter=true;
+      state.aim.valid=false;
+      return;
+    }
     updateAim(p);
   }
 }
 function handleUp(p){
   if(state.screen==='game'){
     if(!state.ready) return;        // 未开始不发射
+    if(state.draggingShooter){       // 拖动炮口结束：移动到位，不发射
+      state.draggingShooter=false;
+      save();
+      return;
+    }
     if(state.introConsumed){        // 开启用的那次点击，up 不发射
       state.introConsumed=false;
       return;
@@ -1184,9 +1253,9 @@ function drawTutorial(){
   if(state.mode!=='official' || state.level!==1 || state.tutorialDone || state.screen!=='game' || !state.ready) return;
   let msg='', arrow='';
   if(state.totalPopped===0 && !state.aim.valid){
-    msg='按住屏幕拖动，瞄准虚线方向'; arrow='🖐️';
+    msg='按住屏幕拖动瞄准 · 或按住炮口左右移动'; arrow='🖐️';
   } else if(state.totalPopped===0 && state.aim.valid && !state.flying){
-    msg='松开发射！让泡泡飞向同色泡泡'; arrow='🚀';
+    msg='松开发射！虚线是泡泡的飞行轨迹'; arrow='🚀';
   } else if(state.totalPopped>0 && !state.won){
     msg='干得漂亮！继续清空所有泡泡'; arrow='🎉';
   } else if(state.won){
@@ -1241,9 +1310,9 @@ function drawHUD(){
 }
 function drawAim(){
   if(!state.aim.valid || state.flying) return;
-  let dx=state.aim.x-SX, dy=state.aim.y-SY; const len=Math.hypot(dx,dy); if(len<1) return;
+  let dx=state.aim.x-state.shooter.x, dy=state.aim.y-state.shooter.y; const len=Math.hypot(dx,dy); if(len<1) return;
   dx/=len; dy/=len; if(dy>-0.15) return;
-  let x=SX,y=SY,vx=dx,vy=dy;
+  let x=state.shooter.x,y=state.shooter.y,vx=dx,vy=dy;
   ctx.fillStyle='rgba(90,168,143,.55)';
   for(let i=0;i<40;i++){
     x+=vx*14; y+=vy*14;
@@ -1257,7 +1326,9 @@ function drawAim(){
   }
 }
 const SWAP_BTN = { x:SX-128, y:SY+28, w:64, h:42 };
+function swapBtn(){ return { x:state.shooter.x-128, y:state.shooter.y+28, w:64, h:42 }; }
 function drawShooter(){
+  const SX=state.shooter.x, SY=state.shooter.y;
   // 发射托架：柔和的弧形底座（像花盆/弹弓口）
   ctx.save();
   const g=ctx.createLinearGradient(0,SY-8,0,SY+40);
@@ -1275,6 +1346,18 @@ function drawShooter(){
   ctx.beginPath(); ctx.ellipse(SX,SY+44,44,7,0,0,Math.PI*2); ctx.fill();
   ctx.restore();
   drawCellShape(SX,SY,R-2,makeCell(state.cur));
+  // 可拖动提示：炮口下方小箭头（呼吸）
+  if(state.ready && !state.flying){
+    const pulse=.4+.3*Math.sin(performance.now()/260);
+    ctx.fillStyle='rgba(90,168,143,'+pulse+')';
+    ctx.font='bold 12px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('⟷ 拖动炮口',SX,SY+60);
+  }
+  // 拖动时炮口高亮
+  if(state.draggingShooter){
+    ctx.strokeStyle='#e8b84a'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(SX,SY,34,0,Math.PI*2); ctx.stroke();
+  }
   // 队列预览：接下来 3 发（大→小）
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('下一个',SX+78,SY-16);
@@ -1282,7 +1365,7 @@ function drawShooter(){
   drawCellShape(SX+104,SY+8,11,makeCell(state.queue[1]??0),.8);
   drawCellShape(SX+125,SY+10,9,makeCell(state.queue[2]??0),.65);
   // 交换按钮（显示剩余次数，用尽置灰；加大触摸区适配手机）
-  const b=SWAP_BTN;
+  const b=swapBtn();
   const canSwap = state.swapsLeft>0 && !state.flying;
   ctx.fillStyle= canSwap ? '#4caf93' : '#b8c9c1';
   roundRect(b.x,b.y,b.w,b.h,21); ctx.fill();
@@ -1335,10 +1418,20 @@ function drawGame(){
   });
   drawAim();
   if(state.flying) drawCellShape(state.flying.x,state.flying.y,R-2,makeCell(state.flying.color));
+  // 补位动画：轻泡上飘移动到新格子（lerp 0.3s）
+  state.floaters=state.floaters.filter(fl=>{
+    fl.t+=1/60;
+    const q=Math.min(1,fl.t/.3), e=1-Math.pow(1-q,3);
+    drawCellShape(fl.fx+(fl.tx-fl.fx)*e, fl.fy+(fl.ty-fl.fy)*e, R-2, fl.cell, .9*(1-q));
+    return fl.t<.3;
+  });
+  // 物理离开动画：轻泡上飘出屏 / 重物抛物线坠落
   state.falling=state.falling.filter(f=>{
-    f.vy+=900/60; f.y+=f.vy/60;
-    drawCellShape(f.x,f.y,R-2,f.cell,.9);
-    return f.y<H+R;
+    f.vy+=(f.grav||900)/60;
+    f.x+=(f.vx||0)/60;
+    f.y+=f.vy/60;
+    drawCellShape(f.x,f.y,R-2,f.cell,.95);
+    return f.y> -R*3 && f.y<H+R*3;
   });
   state.particles=state.particles.filter(p=>{
     p.t+=1/60; p.x+=p.vx/60; p.y+=p.vy/60; p.vy+=150/60;
@@ -1908,7 +2001,7 @@ function frame(now){
 
 /* ---------------- 验证钩子 ---------------- */
 window.__GARDEN_TEST__ = {
-  version:'0.6',
+  version:'0.7',
   loadLevel(n){ state.mode='official'; state.level=n; buildLevel(n); state.screen='game'; },
   loadCustomDef(def){ state.mode='custom'; state.customDef=def; buildCustom(def); state.screen='game'; },
   state(){ return { screen:state.screen, mode:state.mode, level:state.level, shotsLeft:state.shotsLeft, score:state.score, bubbles:Object.keys(state.cells).length, won:state.won, stars:state.stars }; },
@@ -2013,6 +2106,12 @@ window.__GARDEN_TEST__ = {
   resetEver(){ state.totalPoppedEver=0; state.maxComboEver=0; },
   encourage(){ return state.encourage; },
   goScreen(s){ state.screen=s; },
+  /* ---- v0.7 物理系统：炮口拖动 / 补位 / 分类轨迹 ---- */
+  shooterPos(){ return {x:state.shooter.x, y:state.shooter.y}; },
+  dragShooterTo(x,y){ state.shooter.x=Math.max(40,Math.min(W-40,x)); state.shooter.y=Math.max(H-160,Math.min(H-36,y)); save(); return this.shooterPos(); },
+  draggingShooterState(){ return state.draggingShooter; },
+  floaters(){ return state.floaters.length; },
+  fallingAnims(){ return state.falling.map(f=>({grav:f.grav||0, vx:f.vx||0, vy:f.vy})); },
   clickAt(x,y){ const r=canvas.getBoundingClientRect();
     canvas.dispatchEvent(new PointerEvent('pointerdown',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true}));
     canvas.dispatchEvent(new PointerEvent('pointerup',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true})); },
