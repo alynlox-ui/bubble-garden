@@ -2,6 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>泡泡花园 · Bubble Garden v0.7</title>
 <style>
@@ -160,7 +163,8 @@ function startDaily(seedOverride){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
-  state.floaters=[];
+  state.floaters=[]; state.trail=[];
+  state.hintT=4.5;
   initQueue();
   state.screen='game';
 }
@@ -232,6 +236,8 @@ const state = {
   shooter:{x:W/2, y:H-84},                                  // 发射炮口（可拖动）
   draggingShooter:false,                                     // 是否正在拖炮口
   floaters:[],                                               // 上飘补位动画 {fx,fy,tx,ty,cell,t}
+  trail:[],                                                  // 飞行拖尾粒子
+  hintT:0,                                                   // 炮口拖动提示计时（首次进关显示）
   lastBonus:0, chapterClear:-1, isNewBest:false,
   reduceMotion:false,
   shakeT:0,
@@ -312,7 +318,8 @@ function buildLevel(n){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
-  state.floaters=[];
+  state.floaters=[]; state.trail=[];
+  state.hintT=4.5;   // 进关提示「炮口可拖动」
   // 首次登场的新属性泡泡 → 屏幕弹介绍（已看过的类型不再打扰）
   if(L.ice) maybeIntro('I');
   if(L.stone) maybeIntro('S');
@@ -342,7 +349,8 @@ function buildCustom(def){
   state.ready=false; state.introT=performance.now()/1000; state.introConsumed=false;
   state.combo=0; state.maxCombo=0; state.totalPopped=0; state.confetti=[];
   state.isNewBest=false; state.lastBonus=0;
-  state.floaters=[];
+  state.floaters=[]; state.trail=[];
+  state.hintT=4.5;
   initQueue();
 }
 function presentNormalColors(){
@@ -689,6 +697,14 @@ function afterSpecialHit(){ settleLanding(0); }
 function stepFlying(dt){
   const f=state.flying; if(!f) return;
   f.x+=f.vx*dt; f.y+=f.vy*dt;
+  // 飞行拖尾：每帧留 2 个渐隐粒子（物理轨迹可视化）
+  if(!state.reduceMotion){
+    for(let i=0;i<2;i++){
+      state.trail.push({x:f.x+(Math.random()-.5)*4, y:f.y+(Math.random()-.5)*4,
+        t:0, life:.22, color:typeof f.color==='number'?PALETTE[f.color%PALETTE.length].main
+          : f.color==='R'?'#e8e0ff': f.color==='B'?'#8a929e': f.color==='L'?'#ffd97a':'#bfe6fa'});
+    }
+  }
   if(f.x<R){f.x=R;f.vx=-f.vx;}
   if(f.x>W-R){f.x=W-R;f.vx=-f.vx;}
   let hit = f.y-R <= BOARD_TOP;
@@ -701,6 +717,7 @@ function stepFlying(dt){
   }
   if(hit){
     state.flying=null;
+    state.trail.length=0;
     if(f.color==='B'){
       const n=cascade([{x:f.x,y:f.y}], new Set());
       settleLanding(n);
@@ -715,7 +732,7 @@ function stepFlying(dt){
       settleLanding(res.popped);
     }
   } else if(f.y>H+R){
-    state.flying=null; settleLanding(0);
+    state.flying=null; state.trail.length=0; settleLanding(0);
   }
 }
 
@@ -1047,6 +1064,7 @@ function handleUp(p){
     if(!state.ready) return;        // 未开始不发射
     if(state.draggingShooter){       // 拖动炮口结束：移动到位，不发射
       state.draggingShooter=false;
+      state.hintT=0;                  // 已学会拖动，关闭提示
       save();
       return;
     }
@@ -1346,17 +1364,35 @@ function drawShooter(){
   ctx.beginPath(); ctx.ellipse(SX,SY+44,44,7,0,0,Math.PI*2); ctx.fill();
   ctx.restore();
   drawCellShape(SX,SY,R-2,makeCell(state.cur));
-  // 可拖动提示：炮口下方小箭头（呼吸）
+  // 可拖动提示：呼吸光圈 + 左右箭头（首次进关更明显）
   if(state.ready && !state.flying){
-    const pulse=.4+.3*Math.sin(performance.now()/260);
-    ctx.fillStyle='rgba(90,168,143,'+pulse+')';
-    ctx.font='bold 12px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText('⟷ 拖动炮口',SX,SY+60);
+    const t0=performance.now()/1000;
+    const pulse=.45+.35*Math.sin(t0*2.6);
+    // 可拖范围指示：底部一条虚线带
+    ctx.setLineDash([5,5]); ctx.strokeStyle='rgba(90,168,143,.25)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(40,SY); ctx.lineTo(W-40,SY); ctx.stroke();
+    ctx.setLineDash([]);
+    // 呼吸光圈
+    ctx.strokeStyle='rgba(90,168,143,'+pulse+')'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(SX,SY,34+pulse*5,0,Math.PI*2); ctx.stroke();
+    // 左右箭头
+    const ay=SY;
+    ctx.fillStyle='rgba(90,168,143,'+(pulse+.2)+')';
+    ctx.font='bold 15px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('◀',SX-44,ay); ctx.fillText('▶',SX+44,ay);
+    // 首次进关提示条（hintT 秒）
+    if(state.hintT>0){
+      ctx.globalAlpha=Math.min(1,state.hintT);
+      ctx.fillStyle='rgba(63,143,119,.95)'; roundRect(W/2-150,H-52,300,34,17); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
+      ctx.fillText('⇔ 按住炮口左右拖动可移动',W/2,H-35);
+      ctx.globalAlpha=1;
+    }
   }
   // 拖动时炮口高亮
   if(state.draggingShooter){
-    ctx.strokeStyle='#e8b84a'; ctx.lineWidth=2.5;
-    ctx.beginPath(); ctx.arc(SX,SY,34,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle='#e8b84a'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(SX,SY,38,0,Math.PI*2); ctx.stroke();
   }
   // 队列预览：接下来 3 发（大→小）
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -1418,19 +1454,53 @@ function drawGame(){
   });
   drawAim();
   if(state.flying) drawCellShape(state.flying.x,state.flying.y,R-2,makeCell(state.flying.color));
-  // 补位动画：轻泡上飘移动到新格子（lerp 0.3s）
+  // 飞行拖尾：渐隐圆点连成轨迹线
+  state.trail=state.trail.filter(t=>{
+    t.t+=1/60;
+    ctx.globalAlpha=Math.max(0,1-t.t/t.life)*.8;
+    ctx.fillStyle=t.color;
+    ctx.beginPath(); ctx.arc(t.x,t.y,3.2*(1-t.t/t.life)+.6,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+    return t.t<t.life;
+  });
+  // 补位动画：轻泡上飘移动到新格子（lerp 0.3s，带星光粒子）
   state.floaters=state.floaters.filter(fl=>{
     fl.t+=1/60;
     const q=Math.min(1,fl.t/.3), e=1-Math.pow(1-q,3);
-    drawCellShape(fl.fx+(fl.tx-fl.fx)*e, fl.fy+(fl.ty-fl.fy)*e, R-2, fl.cell, .9*(1-q));
+    const cx=fl.fx+(fl.tx-fl.fx)*e, cy=fl.fy+(fl.ty-fl.fy)*e;
+    drawCellShape(cx,cy,R-2,fl.cell,.9*(1-q)+.15);
+    // 上飘星光
+    if(!state.reduceMotion && Math.random()<.5){
+      state.particles.push({x:cx+(Math.random()-.5)*14, y:cy+(Math.random()-.5)*14,
+        vx:(Math.random()-.5)*30, vy:-30-Math.random()*40, t:0, life:.4,
+        color:'rgba(255,255,255,.9)', r:1.6+Math.random()*1.4});
+    }
+    // 补位到达时小闪光
+    if(q>=.92 && !fl._ping){
+      fl._ping=true;
+      spawnExplosion(cx,cy);
+    }
     return fl.t<.3;
   });
-  // 物理离开动画：轻泡上飘出屏 / 重物抛物线坠落
+  // 物理离开动画：轻泡上飘出屏 / 重物抛物线坠落（重物带旋转+尘土）
   state.falling=state.falling.filter(f=>{
     f.vy+=(f.grav||900)/60;
     f.x+=(f.vx||0)/60;
     f.y+=f.vy/60;
-    drawCellShape(f.x,f.y,R-2,f.cell,.95);
+    const heavy = (f.grav||0)>0;
+    if(heavy){
+      f.rot=(f.rot||0)+.22;   // 重物旋转（抛物线翻滚）
+      ctx.save(); ctx.translate(f.x,f.y); ctx.rotate(f.rot);
+      drawCellShape(0,0,R-2,f.cell,.95);
+      ctx.restore();
+      if(!state.reduceMotion && Math.random()<.6){   // 尘土粒子
+        state.particles.push({x:f.x+(Math.random()-.5)*10, y:f.y+(Math.random()-.5)*10,
+          vx:(Math.random()-.5)*50, vy:40+Math.random()*40, t:0, life:.35,
+          color:'rgba(190,180,160,.7)', r:1.5+Math.random()*1.6});
+      }
+    } else {
+      drawCellShape(f.x,f.y,R-2,f.cell,.95);
+    }
     return f.y> -R*3 && f.y<H+R*3;
   });
   state.particles=state.particles.filter(p=>{
@@ -1515,6 +1585,9 @@ function drawMenu(){
   ctx.fillStyle=tg; ctx.font='bold 28px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('🫧 泡泡花园',W/2,54);
   ctx.restore();
+  // 版本角标（确认加载到新版）
+  ctx.fillStyle='rgba(127,184,164,.55)'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('v0.7 · 物理更新',W-62,640);
   // 总星数进度条（圆润+发光轨道）
   const ts=totalStars(), max=LEVELS.length*3;
   ctx.save();
@@ -1994,6 +2067,7 @@ function frame(now){
   if(state.screen==='game') stepFlying(dt);
   if(state.shakeT>0) state.shakeT=Math.max(0,state.shakeT-dt*1.6);
   if(state.toastT>0) state.toastT-=dt;
+  if(state.hintT>0) state.hintT-=dt;
   saveAcc+=dt; if(saveAcc>5){ saveAcc=0; save(); }
   draw();
   requestAnimationFrame(frame);
