@@ -576,7 +576,7 @@ function physicsSettle(){
       state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*220, vy:-170-Math.random()*120, grav:430, cell});
     } else {
       // 轻泡：向上飘出屏幕（浮力向上，慢速优雅）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-40-Math.random()*40, grav:-50, cell});
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-30-Math.random()*30, grav:-35, cell});
     }
   }
   return dropped;
@@ -1465,27 +1465,33 @@ function drawGame(){
     ctx.globalAlpha=1;
     return t.t<t.life;
   });
-  // 补位动画：轻泡挣脱后沿弧线上飘到新格子（0.55s，先沉后飘更有浮力感）
+  // 补位动画：轻泡挣脱后沿弧线上飘到新格子（0.9s，慢速优雅浮力）
   state.floaters=state.floaters.filter(fl=>{
     fl.t+=1/60;
-    const D=.55;
+    const D=.9;
     const q=Math.min(1,fl.t/D);
-    // 弧线：x 直线插值，y 先下沉一点再快速上飘（像挣脱重力）
-    const e=1-Math.pow(1-q,3);
+    // 前 25% 时间：原地微微颤抖（"愣一下"再浮起，像刚失去支撑）
+    const hold=Math.min(1,q*4);
+    const e=1-Math.pow(1-hold,3);
     const cx=fl.fx+(fl.tx-fl.fx)*e;
-    const dip=Math.sin(Math.min(1,q*2.2)*Math.PI)*10*(1-q);   // 先沉 10px 再浮起
+    // 先沉 8px 再缓慢上飘（浮力挣脱感）
+    const dip=Math.sin(hold*Math.PI)*8*(1-hold);
     const cy=fl.fy+(fl.ty-fl.fy)*e - dip;
-    // 飘浮摆动（左右微晃）
-    const sway=Math.sin(q*7)*2.5*(1-q);
-    drawCellShape(cx+sway,cy,R-2,fl.cell,Math.min(1,.5+q*.5));
-    // 目标位置高亮圈（提示补位去向）
-    ctx.strokeStyle='rgba(232,184,74,'+(0.55*(1-q))+')'; ctx.lineWidth=2;
+    // 飘浮摆动（左右缓慢摇晃）
+    const sway=Math.sin(q*4)*3*(1-q);
+    // 浮起前微微缩放（像在挣脱）
+    const sc=1+Math.sin(hold*12)*.06*(1-hold);
+    ctx.save(); ctx.translate(cx+sway,cy); ctx.scale(sc,sc);
+    drawCellShape(0,0,R-2,fl.cell,Math.min(1,.3+hold*.7));
+    ctx.restore();
+    // 目标位置高亮圈（金色呼吸）
+    ctx.strokeStyle='rgba(232,184,74,'+(0.5*(1-q))+')'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.arc(fl.tx,fl.ty,R-2,0,Math.PI*2); ctx.stroke();
-    // 上飘星光（更密更亮）
-    if(!state.reduceMotion && Math.random()<.75){
-      state.particles.push({x:cx+(Math.random()-.5)*18, y:cy+(Math.random()-.5)*18,
-        vx:(Math.random()-.5)*40, vy:-40-Math.random()*60, t:0, life:.45,
-        color:Math.random()<.5?'rgba(255,240,190,.95)':'rgba(255,255,255,.9)', r:1.8+Math.random()*1.6});
+    // 上飘星光（更密更亮，贯穿全程）
+    if(!state.reduceMotion && Math.random()<.8){
+      state.particles.push({x:cx+(Math.random()-.5)*20, y:cy+(Math.random()-.5)*20,
+        vx:(Math.random()-.5)*50, vy:-50-Math.random()*80, t:0, life:.5,
+        color:Math.random()<.5?'rgba(255,240,190,.95)':'rgba(255,255,255,.9)', r:2+Math.random()*2});
     }
     // 到达时小闪光
     if(q>=.92 && !fl._ping){
@@ -1522,14 +1528,17 @@ function drawGame(){
       drawCellShape(0,0,R-2,f.cell,.95);
       ctx.restore();
     } else {
-      // 轻泡上飘：带轻微摇摆和向上星光
-      const sway=Math.sin(f.y*.03+(f.vx||0)*.1)*4;
+      // 轻泡上飘：带摇摆和缩放（缓慢浮起）
+      const sway=Math.sin(f.y*.03+(f.vx||0)*.1)*5;
+      const sc=1+Math.sin(f.y*.1)*.04;
       if(!state.reduceMotion && Math.random()<.5){
         state.particles.push({x:f.x+sway+(Math.random()-.5)*10, y:f.y+(Math.random()-.5)*10,
           vx:(Math.random()-.5)*20, vy:-30-Math.random()*40, t:0, life:.35,
           color:'rgba(255,255,255,.85)', r:1.4+Math.random()*1.2});
       }
-      drawCellShape(f.x+sway,f.y,R-2,f.cell,.95);
+      ctx.save(); ctx.translate(f.x+sway,f.y); ctx.scale(sc,sc);
+      drawCellShape(0,0,R-2,f.cell,.95);
+      ctx.restore();
     }
     return f.y> -R*3 && f.y<H+R*3;
   });
