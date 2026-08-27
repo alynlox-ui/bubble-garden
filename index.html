@@ -572,11 +572,11 @@ function physicsSettle(){
     if(!cell) continue;
     delCell(fr,fc); dropped++; state.score+=20;
     if(cell.t==='S' || cell.t==='B'){
-      // 重物：低抛后立即进入陨石级猛砸（炸弹 1600 / 石头 1400，砸地惊天动地）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*340, vy:-140-Math.random()*80, grav:cell.t==='B'?1600:1400, cell});
+      // 重物：几乎不抛高，直接进入陨石级猛砸（初速小 → 立即下坠）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*340, vy:-80-Math.random()*80, grav:cell.t==='B'?1600:1400, cell});
     } else {
-      // 轻泡：火箭式上浮（浮力恐怖，一挣脱就瞬间冲出屏幕）
-      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-280-Math.random()*120, grav:-450, cell});
+      // 轻泡：火箭点火式上浮（初速慢 -80~-140，浮力加速度 4 倍 -1800，点火后轰然冲出屏幕）
+      state.falling.push({x:cellX(fr,fc), y:cellY(fr), vx:(Math.random()-.5)*60, vy:-80-Math.random()*60, grav:-1800, cell});
     }
   }
   return dropped;
