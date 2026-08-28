@@ -45,6 +45,7 @@ const ED_TOP = 116;
 const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
+const SHOT_MIN_X = W * 0.25, SHOT_MAX_X = W * 0.75;   // 炮口左右移动范围：底部宽度的一半（居中 105..315），高度固定
 const SPEED = 200, BUOY = -800;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
 const BOMB_SPEED = 900;           // 炸弹专用发射初速（主人调的，配合 600 下坠加速度可砸到顶行）
 const BOMB_RAD = 2.6 * R;
@@ -568,7 +569,7 @@ function physicsSettle(){
       delCell(r,c); setCellRaw(target[0],target[1],cell);
       moved=true;
     };
-    // (a) 单侧支撑上浮补位：左上/右上仅一侧有泡泡 → 轻泡飘进上方的空格（目标必须锚定邻接）
+    // (a) 上浮补位：左上/右上任意一侧没有泡泡 → 轻泡飘进上方的空格（目标必须锚定邻接）
     const keys=Object.keys(state.cells).sort((a,b)=>{
       const [ra,ca]=parseKey(a), [rb,cb]=parseKey(b);
       return ra-rb || ca-cb;                 // 自上而下扫描，高处的先卡稳
@@ -581,9 +582,8 @@ function physicsSettle(){
       const ur=r-1;
       const slots = r%2===0 ? [[ur,c-1],[ur,c]] : [[ur,c],[ur,c+1]];
       const inb = slots.filter(([,cc])=> cc>=0 && cc<colsInRow(ur));
-      if(inb.length<2) continue;               // 边缘只有一个上侧格，无空位可补
       const occ = inb.filter(([rr,cc])=> getCell(rr,cc)!==undefined);
-      if(occ.length!==1) continue;             // 仅"恰有一侧支撑"才触发
+      if(occ.length>=inb.length) continue;     // 上侧全满（双侧支撑/边缘单侧支撑）→ 不动
       const empty = inb.find(([rr,cc])=> getCell(rr,cc)===undefined);
       if(!anchoredNb(empty[0],empty[1])) continue;   // 目标必须是锚定邻接（禁止飘进半空孤位）
       moveCell(r,c,empty,cell);
@@ -820,7 +820,7 @@ function load(){ try{
   state.themeCurrent=THEMES.some(t=>t.id===d.themeCurrent)?d.themeCurrent:'meadow';
   state.totalPoppedEver=d.totalPoppedEver||0; state.maxComboEver=d.maxComboEver||0;
   const sh=d.shooter||{};
-  state.shooter={ x:Math.max(40,Math.min(W-40, sh.x||W/2)), y:Math.max(H-160,Math.min(H-36, sh.y||H-84)) };
+  state.shooter={ x:Math.max(SHOT_MIN_X,Math.min(SHOT_MAX_X, sh.x||W/2)), y:H-84 };
 }catch(e){} }
 
 /* ---------------- 创意工坊 ---------------- */
@@ -922,9 +922,9 @@ canvas.addEventListener('pointermove', e=>{
   const p=canvasXY(e);
   if(state.screen==='game' && state.introConsumed) return;   // 开启手势中的移动不激活瞄准
   if(state.screen==='game' && state.draggingShooter){
-    // 拖动炮口：限制在底部活动区（不碰到棋盘与边缘）
-    state.shooter.x=Math.max(40, Math.min(W-40, p.x));
-    state.shooter.y=Math.max(H-160, Math.min(H-36, p.y));
+    // 拖动炮口：仅左右移动（高度固定），范围 = 底部宽度的一半（居中）
+    state.shooter.x=Math.max(SHOT_MIN_X, Math.min(SHOT_MAX_X, p.x));
+    state.shooter.y=H-84;
     state.aim.valid=false;
     return;
   }
@@ -1381,8 +1381,8 @@ function drawAim(){
     if(stop) break;
   }
 }
-const SWAP_BTN = { x:SX-128, y:SY+28, w:64, h:42 };
-function swapBtn(){ return { x:state.shooter.x-128, y:state.shooter.y+28, w:64, h:42 }; }
+const SWAP_BTN = { x:16, y:H-56, w:64, h:42 };   // 底部固定（不随炮口移动）
+function swapBtn(){ return { x:16, y:H-56, w:64, h:42 }; }
 function drawShooter(){
   const SX=state.shooter.x, SY=state.shooter.y;
   // 发射托架：柔和的弧形底座（像花盆/弹弓口）
@@ -1408,7 +1408,7 @@ function drawShooter(){
     const pulse=.45+.35*Math.sin(t0*2.6);
     // 可拖范围指示：底部一条虚线带
     ctx.setLineDash([5,5]); ctx.strokeStyle='rgba(90,168,143,.25)'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.moveTo(40,SY); ctx.lineTo(W-40,SY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(SHOT_MIN_X,SY); ctx.lineTo(SHOT_MAX_X,SY); ctx.stroke();
     ctx.setLineDash([]);
     // 呼吸光圈
     ctx.strokeStyle='rgba(90,168,143,'+pulse+')'; ctx.lineWidth=2.5;
@@ -1432,12 +1432,13 @@ function drawShooter(){
     ctx.strokeStyle='#e8b84a'; ctx.lineWidth=3;
     ctx.beginPath(); ctx.arc(SX,SY,38,0,Math.PI*2); ctx.stroke();
   }
-  // 队列预览：接下来 3 发（大→小）
+  // 队列预览：接下来 3 发（大→小）——固定在底部右侧，不随炮口移动
+  const NX=W-96, NY=H-106;
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('下一个',SX+78,SY-16);
-  drawCellShape(SX+78,SY+4,15,makeCell(state.queue[0]??0),.95);
-  drawCellShape(SX+104,SY+8,11,makeCell(state.queue[1]??0),.8);
-  drawCellShape(SX+125,SY+10,9,makeCell(state.queue[2]??0),.65);
+  ctx.fillText('下一个',NX,NY-24);
+  drawCellShape(NX,NY,15,makeCell(state.queue[0]??0),.95);
+  drawCellShape(NX+26,NY+4,11,makeCell(state.queue[1]??0),.8);
+  drawCellShape(NX+47,NY+6,9,makeCell(state.queue[2]??0),.65);
   // 交换按钮（显示剩余次数，用尽置灰；加大触摸区适配手机）
   const b=swapBtn();
   const canSwap = state.swapsLeft>0 && !state.flying;
@@ -1695,7 +1696,7 @@ function drawMenu(){
   ctx.restore();
   // 版本角标（确认加载到新版）
   ctx.fillStyle='rgba(127,184,164,.55)'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('v0.7 · 物理更新',W-62,640);
+  ctx.fillText('v0.8p · 底栏固定+横移炮口',W-62,640);
   // 总星数进度条（圆润+发光轨道）
   const ts=totalStars(), max=LEVELS.length*3;
   ctx.save();
@@ -2290,7 +2291,7 @@ window.__GARDEN_TEST__ = {
   goScreen(s){ state.screen=s; },
   /* ---- v0.7 物理系统：炮口拖动 / 补位 / 分类轨迹 ---- */
   shooterPos(){ return {x:state.shooter.x, y:state.shooter.y}; },
-  dragShooterTo(x,y){ state.shooter.x=Math.max(40,Math.min(W-40,x)); state.shooter.y=Math.max(H-160,Math.min(H-36,y)); save(); return this.shooterPos(); },
+  dragShooterTo(x,y){ state.shooter.x=Math.max(SHOT_MIN_X,Math.min(SHOT_MAX_X,x)); state.shooter.y=H-84; save(); return this.shooterPos(); },
   draggingShooterState(){ return state.draggingShooter; },
   floaters(){ return state.floaters.length; },
   fallingAnims(){ return state.falling.map(f=>({grav:f.grav||0, vx:f.vx||0, vy:f.vy})); },
