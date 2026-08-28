@@ -6,7 +6,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>泡泡花园 · Bubble Garden v0.7</title>
+<title>泡泡花园 · Bubble Garden v1.0</title>
 <style>
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:linear-gradient(#eaf7f0,#fff9f5);
             overscroll-behavior:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
@@ -211,10 +211,12 @@ const SAVE_KEY = 'bubble-garden-demo-v2';
 
 /* ============================================================
    神秘关卡系统（彩蛋）：第 5/10/15/20/25/30/35/40/45/50 关
-   「神秘」关卡 = 正常机制 + 一个不影响通关的诡异小彩蛋。
-   进入关卡前提示「这个关卡很神秘哦~~」，通关后出一道选择题，
-   让玩家选出本关的诡异 bug（选对得 20 分彩蛋分）。
-   彩蛋全部是纯视觉/音效层，不影响物理、消除、胜负判定。
+   「神秘」关卡 = 正常机制 + 一个看起来像游戏真的出了故障的 bug。
+   进关前**没有任何提示**，玩家毫无防备地撞上"游戏坏了"；
+   通关后出一道选择题，让玩家找出本关的 bug（答对 +20 分）。
+   ★ 全部是纯视觉/音效层的假故障：数字乱闪、预览说谎、音效跑调……
+     不碰任何游戏状态（步数/得分/队列/消除/胜负判定全部真实有效），
+     只是"看起来坏了"。
    ============================================================ */
 function isMysteryLevel(n){ return state.mode==='official' && n%5===0; }
 /* bug 池：每个彩蛋用独立随机源取种子，保证每局重现一致（同关同 bug 同选项） */
@@ -232,23 +234,51 @@ function pickMysteryBug(){
 }
 /* 视觉分支辅助：神秘 bug 仅在官方关卡的 game/result 画面生效 */
 function mysteryOn(id){ return state.mysteryBug===id && (state.screen==='game'||state.screen==='result'); }
-/* 每个彩蛋：minLevel 首次出现关卡 / name 选择题文案 / desc 开场提示文案
-   id 对应绘制代码里的表现分支（全部纯视觉/音效，不影响逻辑） */
+/* 每个彩蛋：minLevel 首次出现关卡 / name 选择题文案 / desc 描述
+   id 对应绘制代码里的表现分支（全部是"看起来像真故障"的纯视觉/音效层假 bug，
+   不碰任何游戏状态——步数/得分/队列/消除/胜负判定全部真实有效） */
 const MYSTERY_BUGS=[
-  { id:'countdown',    minLevel:5,  name:'泡泡在倒着数',      desc:'泡泡倒着数数，树也倒着长…' },
-  { id:'creepyShake',  minLevel:10, name:'背景在诡异抖动',    desc:'背景开始诡异抖动，云也在发抖…' },
-  { id:'googly',       minLevel:15, name:'泡泡都在斜眼看你',  desc:'泡泡都在斜眼看你，盯得心里发毛…' },
-  { id:'bgmReversed',  minLevel:20, name:'BGM 在倒放',        desc:'背景音乐倒着放，音效也变得怪怪的…' },
-  { id:'gunShake',     minLevel:25, name:'枪头在抖动',        desc:'枪头在轻微抖动，像在害怕什么…' },
-  { id:'wink',         minLevel:30, name:'星星偷偷眨眼睛',    desc:'星星偷偷眨眼睛，天空变得不对劲…' },
-  { id:'rainbowShift', minLevel:35, name:'彩虹泡在变色',      desc:'彩虹泡泡开始自己变色，变得诡异…' },
-  { id:'inverted',     minLevel:40, name:'背景倒过来了',      desc:'背景倒过来了！世界颠倒了…' },
-  { id:'shadowCreep',  minLevel:45, name:'影子在悄悄移动',    desc:'影子在悄悄移动，泡泡的影子不对劲…' },
-  { id:'silentScream', minLevel:50, name:'泡泡在无声尖叫',    desc:'泡泡在无声尖叫，空气都凝固了…' },
+  { id:'shotLie',      minLevel:5,  name:'步数计数器在说谎',   desc:'"剩余步数"显示的数字和实际对不上…' },
+  { id:'queueLie',     minLevel:10, name:'预览泡泡在说谎',     desc:'"下一个"预览和实际发射的泡泡不一样…' },
+  { id:'scoreGlitch',  minLevel:15, name:'得分显示出了故障',   desc:'得分数字乱跳乱闪，根本没法看…' },
+  { id:'detuned',      minLevel:20, name:'音效全部跑调了',     desc:'所有音效都跑调了，像坏掉的乐器…' },
+  { id:'uiMisalign',   minLevel:25, name:'界面文字出现了重影', desc:'界面文字重影错位，像渲染出了错…' },
+  { id:'colorDesync',  minLevel:30, name:'泡泡颜色闪烁错乱',   desc:'泡泡不时闪过错误的颜色，像没加载好…' },
+  { id:'fakeLag',      minLevel:35, name:'画面在掉帧卡顿',     desc:'画面一顿一顿地跳，像卡住了一样…' },
+  { id:'ghostTrail',   minLevel:40, name:'画面残留着虚影',     desc:'画面里总有一层虚影甩不掉…' },
+  { id:'screenTear',   minLevel:45, name:'屏幕出现了撕裂',     desc:'屏幕被撕开了，画面错位断开…' },
+  { id:'corruptText',  minLevel:50, name:'文字全变成了乱码',   desc:'所有文字都变成了乱码，像网页编码坏掉了…' },
 ];
 function mysteryBugInfo(id){ return MYSTERY_BUGS.find(b=>b.id===id)||null; }
-/* 结算后选择题状态 */
-const state_MYSTERY_QUIZ={ visible:false, q:null, answered:false, pick:-1 };
+/* bug 特效时基工具：时间槽 + 整数哈希，让效果按固定节拍切换（不在 60fps 里乱闪） */
+function bugTick(div){ return Math.floor(performance.now()/div); }
+function bugHash(n){ n=(n|0)^61; n=n^(n>>>16); n=n+(n<<3)|0; n^=n>>>4; n=Math.imul(n,0x27d4eb2d); n^=n>>>15; return (n>>>0)/4294967296; }
+/* 乱码 bug（纯显示层）：字节级还原真实的编码事故 —— UTF-8 字节序列被当成
+   Windows-1252 错误解读（网页 charset 声明错误时最常见的乱码形态）。
+   ASCII/数字原样通过（和真实乱码一致，数字依然可读 → 不影响游玩），
+   中文每个字节映射成 é/å/â/¿/½ 等拉丁字符，未定义字节显示替换符「豆腐块」 */
+const CP1252_HI={0x80:'\u20AC',0x82:'\u201A',0x83:'\u0192',0x84:'\u201E',0x85:'\u2026',0x86:'\u2020',0x87:'\u2021',0x88:'\u02C6',0x89:'\u2030',0x8A:'\u0160',0x8B:'\u2039',0x8C:'\u0152',0x8E:'\u017D',0x91:'\u2018',0x92:'\u2019',0x93:'\u201C',0x94:'\u201D',0x95:'\u2022',0x96:'\u2013',0x97:'\u2014',0x98:'\u02DC',0x99:'\u2122',0x9A:'\u0161',0x9B:'\u203A',0x9C:'\u0153',0x9E:'\u017E',0x9F:'\u0178'};
+function utf8BytesOf(s){
+  const out=[];
+  for(const ch of s){
+    const cp=ch.codePointAt(0);
+    if(cp<0x80) out.push(cp);
+    else if(cp<0x800) out.push(0xC0|(cp>>6), 0x80|(cp&0x3F));
+    else if(cp<0x10000) out.push(0xE0|(cp>>12), 0x80|((cp>>6)&0x3F), 0x80|(cp&0x3F));
+    else out.push(0xF0|(cp>>18), 0x80|((cp>>12)&0x3F), 0x80|((cp>>6)&0x3F), 0x80|(cp&0x3F));
+  }
+  return out;
+}
+function garbleStr(s){
+  let out='';
+  for(const b of utf8BytesOf(s)){
+    if(b<0x80) out+=String.fromCharCode(b);            // ASCII 原样通过
+    else if(b===0xAD) out+='-';                        // 软连字符：多数渲染环境显示为短横
+    else if(b>=0xA0) out+=String.fromCharCode(b);      // Latin-1 高区
+    else out+=CP1252_HI[b]!==undefined ? CP1252_HI[b] : '\uFFFD';   // 未定义字节 → 替换符（豆腐块）
+  }
+  return out;
+}
 
 
 const canvas = document.getElementById('game');
@@ -334,28 +364,16 @@ function neighbors(r,c){
 
 /* ---------------- 音效 ---------------- */
 function ac(){ if(!audioCtx){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return audioCtx; }
-function tone(f,d,type,vol,delay){ if(state.muted) return; const a=ac(); if(!a) return; const t0=a.currentTime+(delay||0);
+function tone(f,d,type,vol,delay){ if(state.muted) return; const a=ac(); if(!a) return;
+  // 音效全部跑调了（神秘 bug，纯音效）：频率按时间槽随机漂移，像坏掉的乐器；不改任何游戏逻辑
+  if(state.mysteryBug==='detuned' && (state.screen==='game'||state.screen==='result')){
+    f = Math.max(40, f * (0.5 + bugHash(Math.floor(f)*7 + bugTick(400)) * 1.2));
+  }
+  const t0=a.currentTime+(delay||0);
   const o=a.createOscillator(),g=a.createGain(); o.type=type||'sine'; o.frequency.setValueAtTime(f,t0);
   g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(vol||.1,t0+.012); g.gain.exponentialRampToValueAtTime(.0001,t0+d);
   o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0+d+.05); }
 function sfxShoot(){ tone(520,.1,'sine',.06); }
-/* BGM 在倒放：一段从高到低的"倒放感"怪音（神秘 bug，纯音效） */
-function sfxReversedMystery(){
-  if(state.muted) return;
-  const a=ac(); if(!a) return;
-  const t0=a.currentTime;
-  for(let i=0;i<4;i++){
-    const o=a.createOscillator(), g=a.createGain();
-    o.type='sine';
-    const f0=520-i*90;
-    o.frequency.setValueAtTime(f0,t0+i*.22);
-    o.frequency.exponentialRampToValueAtTime(Math.max(40,f0*.4),t0+i*.22+.8);
-    g.gain.setValueAtTime(0,t0+i*.22);
-    g.gain.linearRampToValueAtTime(.05,t0+i*.22+.06);
-    g.gain.exponentialRampToValueAtTime(.0001,t0+i*.22+.85);
-    o.connect(g); g.connect(a.destination); o.start(t0+i*.22); o.stop(t0+i*.22+1);
-  }
-}
 function sfxPop(n){ for(let i=0;i<Math.min(n,5);i++) tone(600+i*110,.12,'triangle',.08,i*.04); }
 function sfxBoom(){ tone(70,.35,'sine',.16); tone(140,.25,'sawtooth',.05,.03); }
 function sfxZap(){ tone(1200,.18,'sawtooth',.05,0,300); }
@@ -394,13 +412,12 @@ function buildLevel(n){
   state.isNewBest=false; state.lastBonus=0;
   state.floaters=[]; state.trail=[];
   state.hintT=4.5;   // 进关提示「炮口可拖动」
-  // 神秘关卡（官方第 5/10/15…关）：选一个不影响通关的诡异 bug，开场情报卡提示 + 结算选择题
+  // 神秘关卡（官方第 5/10/15…关）：选一个"看起来像真故障"的 bug，结算后出选择题
   state.mysteryQuiz=null;
   if(isMysteryLevel(n)){
     const m=pickMysteryBug();
     state.mysteryBug=m.bug.id;
-    state.mysteryQuiz={ question:'本关的神秘彩蛋是哪个？', options:m.options.map(o=>o.name), correct:m.bug.name, picked:-1, answered:false };
-    if(m.bug.id==='bgmReversed') sfxReversedMystery();   // 开场就倒放
+    state.mysteryQuiz={ question:'本关出现的是哪个 bug？', options:m.options.map(o=>o.name), correct:m.bug.name, picked:-1, answered:false };
   } else {
     state.mysteryBug=null;
   }
@@ -1240,19 +1257,18 @@ function resultButtons(){
 /* ---------------- 绘制 ---------------- */
 function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
 function drawBubble(x,y,r,ci,alpha){
-  const P=PALETTE[((ci%PALETTE.length)+PALETTE.length)%PALETTE.length];
+  // 泡泡颜色闪烁错乱（神秘 bug，纯视觉）：部分时间槽显示错误的颜色，像贴图加载失败（真实颜色逻辑不变）
+  let lieCi=ci;
+  if(mysteryOn('colorDesync')){
+    const tk=bugTick(600);
+    if(bugHash(tk*31+ci*7)<0.35) lieCi=(ci+1+Math.floor(bugHash(tk+ci)*5))%PALETTE.length;
+  }
+  const P=PALETTE[((lieCi)%PALETTE.length+PALETTE.length)%PALETTE.length];
   ctx.save(); ctx.globalAlpha=alpha==null?1:alpha;
   // 底部柔光（让泡泡像浮在空中的玻璃球）
   const soft=ctx.createRadialGradient(x,y+r*.25,r*.1,x,y,r);
   soft.addColorStop(0,'rgba(255,255,255,.28)'); soft.addColorStop(.55,'rgba(255,255,255,0)');
   ctx.fillStyle=soft; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
-  // 影子在悄悄移动：泡泡底下多出一团不规则暗影（神秘 bug）
-  if(mysteryOn('shadowCreep')){
-    const tt=performance.now()/1000;
-    const ox=Math.sin(tt*1.3)*r*.55, oy=Math.cos(tt*.9)*r*.35;
-    ctx.fillStyle='rgba(30,20,45,.22)';
-    ctx.beginPath(); ctx.ellipse(x+ox,y+oy,r*1.1,r*.75,0,0,Math.PI*2); ctx.fill();
-  }
   // 主体渐变
   const g=ctx.createRadialGradient(x-r*.32,y-r*.34,r*.08,x,y,r);
   g.addColorStop(0,P.light); g.addColorStop(.55,P.main); g.addColorStop(1,P.dark);
@@ -1271,35 +1287,8 @@ function drawBubble(x,y,r,ci,alpha){
   // 底部月牙反光
   ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=1.2;
   ctx.beginPath(); ctx.arc(x,y,r*.82,.9,2.2); ctx.stroke();
-  // 泡泡都在斜眼看你：两只斜视的眼睛（神秘 bug）
-  if(mysteryOn('googly')) drawGooglyEyes(x,y,r);
-  // 泡泡在无声尖叫：一张张开的嘴（神秘 bug）
-  else if(mysteryOn('silentScream')) drawScreamMouth(x,y,r);
   ctx.restore();
 }
-/* 神秘彩蛋视觉：斜视的眼睛（瞳孔朝向炮口/缓慢游走） */
-function drawGooglyEyes(x,y,r){
-  const tt=performance.now()/1000;
-  const ang=Math.atan2(state.shooter.y-y, state.shooter.x-x)+Math.sin(tt*.8)*.4;
-  const ox=Math.cos(ang)*r*.2, oy=Math.sin(ang)*r*.2;
-  const er=Math.max(2.5,r*.21);
-  ctx.fillStyle='#fff';
-  ctx.beginPath(); ctx.arc(x-r*.32,y-r*.14,er,0,Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(x+r*.32,y-r*.14,er,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#2c3037';
-  ctx.beginPath(); ctx.arc(x-r*.32+ox,y-r*.14+oy,er*.5,0,Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(x+r*.32+ox,y-r*.14+oy,er*.5,0,Math.PI*2); ctx.fill();
-}
-/* 神秘彩蛋视觉：无声尖叫的嘴（颤抖的黑色椭圆） */
-function drawScreamMouth(x,y,r){
-  const tt=performance.now()/1000;
-  const wob=Math.sin(tt*9)*r*.05;
-  ctx.fillStyle='#2c3037';
-  ctx.beginPath(); ctx.ellipse(x,y+r*.3,r*.22,r*.3+wob,0,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#e5718f';
-  ctx.beginPath(); ctx.ellipse(x,y+r*.36,r*.09,r*.12,0,0,Math.PI*2); ctx.fill();
-}
-
 function drawCellShape(x,y,r,cell,alpha){
   const t=cell.t;
   if(typeof t==='number') return drawBubble(x,y,r,t,alpha);
@@ -1308,10 +1297,11 @@ function drawCellShape(x,y,r,cell,alpha){
     const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
     g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6e0f5');
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
-    // 彩虹泡在变色：彩色环持续旋转变色（神秘 bug，纯视觉）
-    const rot = mysteryOn('rainbowShift') ? (performance.now()/1000)*2.2 : 0;
+    // 彩虹泡在变色（神秘 bug，纯视觉）：彩色环按时间槽跳换颜色，像贴图加载错乱（真实颜色逻辑不变）
+    let rot=0, ringShift=0;
+    if(mysteryOn('colorDesync')){ const tk=bugTick(600); if(bugHash(tk*17)<0.4) ringShift=1+Math.floor(bugHash(tk)*5); }
     for(let i=0;i<6;i++){
-      ctx.strokeStyle=PALETTE[(i+Math.floor(rot*2))%6].main; ctx.lineWidth=3.5;
+      ctx.strokeStyle=PALETTE[(i+Math.floor(rot*2)+ringShift)%6].main; ctx.lineWidth=3.5;
       ctx.beginPath(); ctx.arc(x,y,r-3.5,i*Math.PI/3+.15+rot,(i+1)*Math.PI/3-.15+rot); ctx.stroke();
     }
     ctx.fillStyle='rgba(255,255,255,.8)';
@@ -1365,16 +1355,14 @@ function curTheme(){ return THEMES.find(t=>t.id===state.themeCurrent)||THEMES[0]
 function drawBG(){
   const TH=curTheme();
   const tbg=performance.now()/1000;
-  // 背景在诡异抖动：整体低频颤抖（神秘 bug，纯视觉）
-  const jx = mysteryOn('creepyShake') ? (Math.sin(tbg*31)*3+Math.sin(tbg*53+1)*2) : 0;
-  const jy = mysteryOn('creepyShake') ? (Math.cos(tbg*37)*3+Math.cos(tbg*61+2)*2) : 0;
   ctx.save();
-  ctx.translate(jx,jy);
-  // 背景倒过来了：世界上下颠倒（神秘 bug，纯视觉）
-  if(mysteryOn('inverted')){ ctx.translate(0,H); ctx.scale(1,-1); }
   const g=ctx.createLinearGradient(0,0,0,H);
   g.addColorStop(0,TH.sky[0]); g.addColorStop(.45,TH.sky[1]); g.addColorStop(1,TH.sky[2]);
-  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=g;
+  // 画面残留着虚影（神秘 bug，纯显示）：背景不完全覆盖上一帧，移动的泡泡甩出虚影（真实逻辑不变）
+  if(mysteryOn('ghostTrail')) ctx.globalAlpha=0.72;
+  ctx.fillRect(0,0,W,H);
+  ctx.globalAlpha=1;
   // 远山剪影
   ctx.fillStyle=TH.hill;
   ctx.beginPath(); ctx.moveTo(0,H); ctx.lineTo(0,H-120);
@@ -1390,27 +1378,16 @@ function drawBG(){
     }
   }
   if(TH.deco==='stars'){
-    // 星夜：闪烁星星 + 月亮（神秘 bug：星星偷偷眨眼睛——部分星星忽明忽暗）
-    const wink=mysteryOn('wink');
+    // 星夜：闪烁星星 + 月亮
     for(let i=0;i<24;i++){
       const sx=(i*97+31)%W, sy=(i*53+17)%180+10;
-      let tw=.4+.6*Math.abs(Math.sin(t*1.5+i));
-      if(wink && i%3===0){ tw = Math.abs(Math.sin(t*5+i*2))>.3 ? .9 : .05; }   // 眨眼节奏异常
+      const tw=.4+.6*Math.abs(Math.sin(t*1.5+i));
       ctx.globalAlpha=tw; ctx.fillStyle='#fff8dc';
       ctx.beginPath(); ctx.arc(sx,sy,i%4===0?2.2:1.3,0,Math.PI*2); ctx.fill();
     }
     ctx.globalAlpha=1;
-    if(wink){
-      // 月亮也变成一只眼睛（眨眼）
-      const open=Math.abs(Math.sin(t*2.3))>.25;
-      ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='#2c3037';
-      if(open){ ctx.beginPath(); ctx.arc(350,70,6,0,Math.PI*2); ctx.fill(); }
-      else { ctx.lineWidth=3; ctx.strokeStyle='#2c3037'; ctx.beginPath(); ctx.moveTo(340,70); ctx.lineTo(360,70); ctx.stroke(); }
-    } else {
-      ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle=TH.sky[0]; ctx.beginPath(); ctx.arc(342,64,18,0,Math.PI*2); ctx.fill();
-    }
+    ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=TH.sky[0]; ctx.beginPath(); ctx.arc(342,64,18,0,Math.PI*2); ctx.fill();
   }
   if(TH.deco==='petals'){
     // 樱花雨：飘落花瓣
@@ -1471,12 +1448,23 @@ function drawTutorial(){
   ctx.fillText('▼',state.shooter.x,state.shooter.y-52);
 }
 function drawHUD(){
+  // 界面文字出现了重影（神秘 bug，纯显示）：每段文字带 RGB 错位重影，像渲染管线出了错（命中/逻辑不变）
+  const GT=(s,x,y)=>{
+    if(mysteryOn('uiMisalign')){
+      const o=2+bugHash(bugTick(900))*2.5;
+      ctx.save();
+      ctx.fillStyle='rgba(255,110,140,.55)'; ctx.fillText(s,x+o,y+1);
+      ctx.fillStyle='rgba(110,190,255,.55)'; ctx.fillText(s,x-o,y-1);
+      ctx.restore();
+    }
+    ctx.fillText(s,x,y);
+  };
   // 返回按钮（玻璃质感）
   ctx.save(); ctx.shadowColor='rgba(120,180,160,.35)'; ctx.shadowBlur=6; ctx.shadowOffsetY=1;
   ctx.fillStyle='rgba(255,255,255,.88)'; roundRect(12,10,76,30,15); ctx.fill();
   ctx.restore();
   ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('← 返回',50,26);
+  GT('← 返回',50,26);
   // 剩余步数（低步数红色呼吸提示）
   ctx.save(); ctx.shadowColor='rgba(120,180,160,.35)'; ctx.shadowBlur=5; ctx.shadowOffsetY=1;
   ctx.fillStyle='rgba(255,255,255,.88)'; roundRect(12,46,110,26,13); ctx.fill();
@@ -1484,15 +1472,14 @@ function drawHUD(){
   const low=state.shotsLeft<=3;
   const breath=low? .7+.3*Math.sin(performance.now()/220) : 1;
   ctx.fillStyle= low?'rgba(229,113,143,'+breath+')':'#5aa88f'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
-  // 泡泡在倒着数：剩余步数倒序/乱码显示（神秘 bug，纯视觉，不影响真实步数逻辑）
-  let shotsTxt=String(state.shotsLeft);
-  if(mysteryOn('countdown')){
-    const cc=performance.now()/1000, cyc=cc%3;
-    shotsTxt = cyc<1 ? shotsTxt.split('').reverse().join('')
-      : cyc<2 ? '▓▒░'+(shotsTxt.length>1?'░▒▓':'')
-      : shotsTxt;
+  // 步数计数器在说谎（神秘 bug，纯显示）：显示的数字按时间槽偷偷偏移±1~3，真实步数不变
+  let lieShots=state.shotsLeft;
+  if(mysteryOn('shotLie')){
+    const tk=bugTick(1500);
+    const drift=1+Math.floor(bugHash(tk*53+state.level)*3);   // 1..3
+    lieShots=Math.max(0,state.shotsLeft + (bugHash(tk*17)<0.5?-drift:drift));
   }
-  ctx.fillText('剩余 '+shotsTxt+' 步',67,60);
+  GT('剩余 '+lieShots+' 步',67,60);
   // 标题 + 得分（居中带投影）
   ctx.save();
   ctx.shadowColor='rgba(255,255,255,.85)'; ctx.shadowBlur=6;
@@ -1501,16 +1488,22 @@ function drawHUD(){
     : state.mode==='test' ? '试玩关卡'
     : state.mode==='daily' ? '📅 每日挑战'
     : (state.customDef&&state.customDef.name?state.customDef.name:'自制关卡');
-  ctx.fillText(title,W/2,26);
+  GT(title,W/2,26);
   ctx.restore();
+  // 得分显示出了故障（神秘 bug，纯显示）：得分数字乱跳乱闪，真实得分不变
+  let scoreTxt=String(state.score);
+  if(mysteryOn('scoreGlitch')){
+    const tk=bugTick(450);
+    if(bugHash(tk*29)<0.6) scoreTxt=String(Math.max(0,state.score+(Math.floor(bugHash(tk)*97)-48)));
+  }
   ctx.fillStyle='#5f9c88'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('得分 '+state.score+(state.streak>=2?' 🔥×'+state.streak:''),W/2,50);
+  GT('得分 '+scoreTxt+(state.streak>=2?' 🔥×'+state.streak:''),W/2,50);
   // 减少动态
   ctx.save(); ctx.shadowColor='rgba(120,180,160,.3)'; ctx.shadowBlur=5; ctx.shadowOffsetY=1;
   ctx.fillStyle= state.reduceMotion?'#ffd97a':'rgba(255,255,255,.88)'; roundRect(W-124,10,112,30,15); ctx.fill();
   ctx.restore();
   ctx.fillStyle= state.reduceMotion?'#8a6a20':'#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
+  GT(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
   drawSoundBtn();
 }
 function drawAim(){
@@ -1533,9 +1526,8 @@ function drawAim(){
 const SWAP_BTN = { x:16, y:H-56, w:64, h:42 };   // 底部固定（不随炮口移动）
 function swapBtn(){ return { x:16, y:H-56, w:64, h:42 }; }
 function drawShooter(){
-  // 枪头在抖动：泡泡枪轻微颤抖（神秘 bug，纯视觉；不改变 state.shooter 逻辑坐标）
-  const gsh = mysteryOn('gunShake') ? (Math.sin(performance.now()/18)*2.5) : 0;
-  const SX=state.shooter.x+gsh, SY=state.shooter.y+(mysteryOn('gunShake')?Math.cos(performance.now()/23)*2:0);
+  const t0=performance.now()/1000;
+  const SX=state.shooter.x, SY=state.shooter.y;
   // ── 泡泡枪建模（v0.8r）：枪头跟随瞄准方向平滑旋转（±71.6° 钳制防翻转，无瞄准回正朝上） ──
   let targetA=0;
   if(state.aim.valid && (state.aim.y-SY)<0){
@@ -1636,9 +1628,17 @@ function drawShooter(){
   const NX=W-72, NY=H-29;
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('下一个',NX,NY-24);
-  drawCellShape(NX,NY,15,makeCell(state.queue[0]??0),.95);
-  drawCellShape(NX+26,NY+4,11,makeCell(state.queue[1]??0),.8);
-  drawCellShape(NX+47,NY+6,9,makeCell(state.queue[2]??0),.65);
+  // 预览泡泡在说谎（神秘 bug，纯显示）：预览按时间槽偷偷换成错误的颜色，真实队列/发射完全不变
+  const liePrev=(c)=>{
+    if(!mysteryOn('queueLie')) return c;
+    if(typeof c!=='number') return c;   // 只对普通色泡撒谎，特殊泡照实显示
+    const tk=bugTick(1200);
+    if(bugHash(tk*41+c*13)<0.55) return (c+1+Math.floor(bugHash(tk+c)*5))%PALETTE.length;
+    return c;
+  };
+  drawCellShape(NX,NY,15,makeCell(liePrev(state.queue[0]??0)),.95);
+  drawCellShape(NX+26,NY+4,11,makeCell(liePrev(state.queue[1]??0)),.8);
+  drawCellShape(NX+47,NY+6,9,makeCell(liePrev(state.queue[2]??0)),.65);
   // 交换按钮（显示剩余次数，用尽置灰；加大触摸区适配手机）
   const b=swapBtn();
   const canSwap = state.swapsLeft>0 && !state.flying;
@@ -1839,23 +1839,8 @@ function drawIntroOverlay(){
     ctx.fillStyle='#e8b84a'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
     ctx.fillText('🎓 新手教程 · 单色教学关',W/2,146);
   }
-  // 神秘关卡开场横幅：紫色诡异提示（每 5 关）
-  if(state.mysteryBug){
-    const mt=performance.now()/1000;
-    const sway=Math.sin(mt*2.2)*3;
-    ctx.save();
-    ctx.shadowColor='rgba(138,106,208,.6)'; ctx.shadowBlur=10;
-    ctx.fillStyle='#8a6ad0'; ctx.font='bold 17px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText('🔮 这个关卡很神秘哦~~',W/2+sway,152);
-    ctx.restore();
-    const info=mysteryBugInfo(state.mysteryBug);
-    ctx.fillStyle='#8a6ad0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText('本关藏着一个不影响通关的小秘密，通关后答对选择题 +20 分',W/2,170);
-    ctx.fillStyle='rgba(138,106,208,.45)'; ctx.font='11px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText('（提示：'+info.desc+'）',W/2,186);
-  }
-  // 关卡情报卡（神秘关卡被横幅占位，卡片稍下移）
-  const card = state.mysteryBug ? {x:40,y:196,w:W-80,h:204} : {x:40,y:180,w:W-80,h:210};
+  // 关卡情报卡（神秘关卡不给任何提示，让玩家毫无防备地撞上诡异）
+  const card={x:40,y:180,w:W-80,h:210};
   ctx.fillStyle='rgba(255,255,255,.95)'; roundRect(card.x,card.y,card.w,card.h,22); ctx.fill();
   ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2.5; roundRect(card.x,card.y,card.w,card.h,22); ctx.stroke();
   const L=state.mode==='official'?LEVELS[state.level-1]:null;
@@ -1977,11 +1962,6 @@ function drawMenu(){
     const best=state.bestMap[lv]||0;
     ctx.fillStyle='#b8c9c1'; ctx.font='9px "Segoe UI",system-ui,sans-serif';
     ctx.fillText(best?('最佳 '+best):'', x+bw/2, y+65);
-    // 神秘关卡标记（第 5/10/15…关）
-    if(!locked && lv%5===0){
-      ctx.fillStyle='#8a6ad0'; ctx.font='11px "Segoe UI",system-ui,sans-serif';
-      ctx.fillText('🔮', x+bw-11, y+12);
-    }
   }
   ctx.restore();
   // 连胜徽章
@@ -2031,7 +2011,7 @@ function drawMenu(){
   ctx.restore();   // 内容块居中结束
   // 版本角标（贴画布底边，确认加载到新版）
   ctx.fillStyle='rgba(127,184,164,.55)'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
-  ctx.textAlign='right'; ctx.fillText('v0.9 · 神秘关卡',W-10,H-8);
+  ctx.textAlign='right'; ctx.fillText('v1.0 · 全屏适配',W-10,H-8);
   drawPopups();
   drawToast();
 }
@@ -2393,6 +2373,9 @@ function mysteryQuizBoxes(){
 function drawMysteryQuiz(){
   const q=state.mysteryQuiz;
   if(!q || state.screen!=='result') return;
+  // bug 调查报告卡豁免乱码化（玩家必须能读题/读选项）：临时还原原生 fillText
+  let restored=false;
+  if(ctx.__garbled){ ctx.fillText=ctx.__garbled; restored=true; }
   const {card,opts}=mysteryQuizBoxes();
   ctx.fillStyle='rgba(20,14,36,.72)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -2404,7 +2387,7 @@ function drawMysteryQuiz(){
   ctx.fillStyle='rgba(185,165,240,.5)';
   for(let i=0;i<6;i++){ ctx.beginPath(); ctx.arc(card.x+40+i*62,card.y+14,2+Math.sin(performance.now()/300+i)*1,0,Math.PI*2); ctx.fill(); }
   ctx.fillStyle='#e8dfff'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('🔮 神秘彩蛋揭秘',W/2,card.y+34);
+  ctx.fillText('🐞 bug 调查报告',W/2,card.y+34);
   ctx.fillStyle='#c9baf2'; ctx.font='14px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(q.question,W/2,card.y+62);
   for(let i=0;i<4;i++){
@@ -2426,12 +2409,16 @@ function drawMysteryQuiz(){
   if(q.answered){
     ctx.fillStyle= q.correctPick ? '#8ee6b8' : '#ffb3c6';
     ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText(q.correctPick ? '🎉 答对啦！彩蛋分 +20' : '😈 猜错啦…神秘彩蛋是「'+q.correct+'」', W/2, card.y+card.h-54);
+    ctx.fillText(q.correctPick ? '🎉 答对啦！彩蛋分 +20' : '😈 猜错啦…真正的 bug 是「'+q.correct+'」', W/2, card.y+card.h-54);
     ctx.fillStyle='rgba(220,210,245,.6)'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
     ctx.fillText('点按任意位置继续',W/2,card.y+card.h-28);
   } else {
     ctx.fillStyle='rgba(220,210,245,.55)'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
-    ctx.fillText('选出一个你认为本关出现的诡异现象',W/2,card.y+card.h-28);
+    ctx.fillText('选出本关出现的那个 bug',W/2,card.y+card.h-28);
+  }
+  // 豁免结束：乱码劫持重新装回（本帧后续绘制继续乱码）
+  if(restored && mysteryOn('corruptText')){
+    ctx.fillText=function(s,x,y,maxW){ return ctx.__garbled.call(this, garbleStr(String(s)), x, y, maxW); };
   }
 }
 function drawToast(){
@@ -2442,7 +2429,21 @@ function drawToast(){
     ctx.fillText(state.toast,W/2,H-30); ctx.globalAlpha=1;
   }
 }
+let lagSkip=0;
 function draw(){
+  // 文字全变成了乱码（神秘 bug，纯显示）：劫持 ctx.fillText，本帧所有文字（HUD/提示/情报卡/结算/按钮）
+  // 全部经过真实编码事故乱码化——唯一豁免：结算后的 bug 调查报告卡（否则玩家没法答题）
+  if(mysteryOn('corruptText') && !ctx.__garbled){
+    ctx.__garbled=ctx.fillText;
+    ctx.fillText=function(s,x,y,maxW){ return ctx.__garbled.call(this, garbleStr(String(s)), x, y, maxW); };
+  } else if(!mysteryOn('corruptText') && ctx.__garbled){
+    ctx.fillText=ctx.__garbled; ctx.__garbled=null;
+  }
+  // 画面在掉帧卡顿（神秘 bug，纯显示）：周期性地跳过重绘，画面一顿一顿地跳（逻辑/物理照常逐帧运行，只是看起来卡）
+  if(mysteryOn('fakeLag')){
+    lagSkip++;
+    if(lagSkip%5===0 || lagSkip%5===1) return;   // 每 5 帧冻 2 帧
+  }
   if(state.screen==='menu') drawMenu();
   else if(state.screen==='custom') drawCustom();
   else if(state.screen==='editor') drawEditor();
@@ -2451,6 +2452,25 @@ function draw(){
   else if(state.screen==='themes') drawThemesScreen();
   else if(state.screen==='game') drawGame();
   else drawResult();
+  // 屏幕出现了撕裂（神秘 bug，纯显示）：把画布横条复制错位，像显卡撕裂（真实画面/逻辑不变）
+  if(mysteryOn('screenTear')){
+    const tk=bugTick(300);
+    const dpr=Math.min(devicePixelRatio||1,2);
+    for(let b=0;b<2;b++){
+      const y=Math.floor(bugHash(tk*13+b*7)*(H-80))+40;   // 撕裂带位置
+      const h=10+Math.floor(bugHash(tk*7+b*3)*18);        // 带宽
+      const off=(bugHash(tk*29+b)<0.5?-1:1)*(8+Math.floor(bugHash(tk+b*11)*12));   // 错位量
+      ctx.save();
+      ctx.setTransform(1,0,0,1,0,0);
+      ctx.drawImage(canvas, 0, Math.round(y*dpr), canvas.width, Math.round(h*dpr), Math.round(off*dpr), Math.round(y*dpr), canvas.width, Math.round(h*dpr));
+      // 撕裂缝：一条细细的白/黑错位线
+      ctx.fillStyle='rgba(255,255,255,.5)';
+      ctx.fillRect(0, Math.round(y*dpr), canvas.width, dpr);
+      ctx.fillStyle='rgba(0,0,0,.35)';
+      ctx.fillRect(0, Math.round((y+h)*dpr), canvas.width, dpr);
+      ctx.restore();
+    }
+  }
 }
 
 /* ---------------- 主循环 ---------------- */
