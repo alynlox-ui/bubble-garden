@@ -655,7 +655,7 @@ function physicsSettle(){
       const [r,c]=parseKey(k);
       if(r<1) continue;                        // 顶行没有上侧（天花板，天然卡稳）
       const cell=getCell(r,c);
-      if(!cell || cell.t==='S' || cell.t==='B') continue;   // 重物不上浮补位
+      if(!cell) continue;
       const ur=r-1;
       const slots = r%2===0 ? [[ur,c-1],[ur,c]] : [[ur,c],[ur,c+1]];
       const inb = slots.filter(([,cc])=> cc>=0 && cc<colsInRow(ur));
@@ -789,7 +789,7 @@ function shoot(){
   const len=Math.hypot(dx,dy); if(len<1) return;
   dx/=len; dy/=len;
   if(dy>-0.15) return;
-  const spd = state.cur==='B' ? BOMB_SPEED : SPEED;   // 炸弹用炮弹级初速，普通泡泡照旧
+  const spd = state.cur==='B' ? bombSpeed() : SPEED;   // 炸弹用炮弹级初速（按 H 补足抛物线），普通泡泡照旧
   state.flying={x:state.shooter.x,y:state.shooter.y,vx:dx*spd,vy:dy*spd,color:state.cur};
   state.shotsLeft--;
   sfxShoot();
@@ -1039,14 +1039,15 @@ function handleDown(p){
     return;
   }
   if(state.screen==='menu'){
-    if(inSound(p)){ toggleMute(); return; }
-    if(inReduce(p)){ toggleReduce(); return; }
-    const tab=chapterTabHit(p);
+    const q={x:p.x,y:p.y-MY()};   // 内容块整体平移 MY()，命中坐标同步回退
+    if(inSound(q)){ toggleMute(); return; }
+    if(inReduce(q)){ toggleReduce(); return; }
+    const tab=chapterTabHit(q);
     if(tab>=0){ state.menuPage=tab; tone(700,.06,'triangle',.05); save(); return; }
-    const lv=menuGridHit(p);
+    const lv=menuGridHit(q);
     if(lv>0 && lv<=state.unlocked){ state.mode='official'; state.level=lv; buildLevel(lv); state.screen='game'; return; }
     for(const b of menuFeatureBtns()){
-      if(inBox(p,b)){
+      if(inBox(q,b)){
         tone(700,.06,'triangle',.05);
         if(b.id==='daily'){ state.screen='daily'; }
         else if(b.id==='ach'){ state.screen='ach'; }
@@ -1054,14 +1055,15 @@ function handleDown(p){
         return;
       }
     }
-    if(inBox(p,menuWorkshopBtn())){ state.screen='custom'; return; }
+    if(inBox(q,menuWorkshopBtn())){ state.screen='custom'; return; }
     return;
   }
   if(state.screen==='daily'){
-    if(inSound(p)){ toggleMute(); return; }
-    if(inBack(p)){ state.screen='menu'; return; }
+    const q={x:p.x,y:p.y-MY()};
+    if(inSound(q)){ toggleMute(); return; }
+    if(inBack(q)){ state.screen='menu'; return; }
     // 开始今日挑战按钮
-    if(p.x>=W/2-110 && p.x<=W/2+110 && p.y>=430 && p.y<=482){
+    if(q.x>=W/2-110 && q.x<=W/2+110 && q.y>=430 && q.y<=482){
       const d=todayStr();
       if(state.dailyDates[d]){ toast('今日挑战已完成，明天再来～'); return; }
       startDaily(); return;
@@ -1069,18 +1071,20 @@ function handleDown(p){
     return;
   }
   if(state.screen==='ach'){
-    if(inSound(p)){ toggleMute(); return; }
-    if(inBack(p)){ state.screen='menu'; return; }
+    const q={x:p.x,y:p.y-MY()};
+    if(inSound(q)){ toggleMute(); return; }
+    if(inBack(q)){ state.screen='menu'; return; }
     return;
   }
   if(state.screen==='themes'){
-    if(inSound(p)){ toggleMute(); return; }
-    if(inBack(p)){ state.screen='menu'; return; }
+    const q={x:p.x,y:p.y-MY()};
+    if(inSound(q)){ toggleMute(); return; }
+    if(inBack(q)){ state.screen='menu'; return; }
     const ts=totalStars();
     for(let i=0;i<THEMES.length;i++){
+      const th=THEMES[i];
       const y=118+i*72;
-      if(p.y>=y && p.y<=y+62 && p.x>=16 && p.x<=W-16){
-        const th=THEMES[i];
+      if(q.y>=y && q.y<=y+62 && q.x>=16 && q.x<=W-16){
         if(state.themeOwned.includes(th.id)){
           state.themeCurrent=th.id; tone(800,.08,'triangle',.07); save();
           toast('已切换到「'+th.name+'」主题');
@@ -1130,13 +1134,14 @@ function handleDown(p){
     return;
   }
   if(state.screen==='result'){
+    const q={x:p.x,y:p.y-MY()};   // 结算内容整体平移 MY()，命中坐标同步回退
     // 神秘彩蛋选择题：未作答时只能点选项；作答后点任意位置关闭复盘
     const mq=state.mysteryQuiz;
     if(mq){
       if(!mq.answered){
         const {opts}=mysteryQuizBoxes();
         for(let i=0;i<4;i++){
-          if(inBox(p,opts[i])){
+          if(inBox(p,opts[i])){   // mysteryQuizBoxes 已含 MY() 偏移，用原始坐标
             mq.picked=i; mq.answered=true; mq.correctPick = mq.options[i]===mq.correct;
             if(mq.correctPick){ state.score+=20; tone(880,.1,'triangle',.08); tone(1175,.14,'triangle',.07,.08); }
             else { tone(220,.25,'sine',.08); }
@@ -1149,7 +1154,7 @@ function handleDown(p){
       return;
     }
     for(const [btn,act] of resultButtons()){
-      if(inBox(p,btn)){ act(); return; }
+      if(inBox(q,btn)){ act(); return; }
     }
     return;
   }
@@ -1463,7 +1468,7 @@ function drawTutorial(){
   // 呼吸光效小箭头指向发射器
   const pulse=.5+Math.sin(performance.now()/300)*.3;
   ctx.fillStyle='rgba(232,184,74,'+pulse+')'; ctx.font='20px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('▼',SX,SY-52);
+  ctx.fillText('▼',state.shooter.x,state.shooter.y-52);
 }
 function drawHUD(){
   // 返回按钮（玻璃质感）
@@ -1628,7 +1633,7 @@ function drawShooter(){
     ctx.beginPath(); ctx.arc(SX,SY,38,0,Math.PI*2); ctx.stroke();
   }
   // 队列预览：接下来 3 发（大→小）——固定在底部右侧，不随炮口移动
-  const NX=HUD_NX, NY=HUD_NY;
+  const NX=W-72, NY=H-29;
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('下一个',NX,NY-24);
   drawCellShape(NX,NY,15,makeCell(state.queue[0]??0),.95);
@@ -1896,6 +1901,7 @@ function drawIntroOverlay(){
 function drawMenu(){
   drawBG();
   ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.save(); ctx.translate(0, MY());   // 竖屏手机 H 变高：内容块整体垂直居中
   // 标题：渐变 + 投影（更精致）
   const tg=ctx.createLinearGradient(0,38,0,66);
   tg.addColorStop(0,'#57b99b'); tg.addColorStop(1,'#2f7d66');
@@ -1904,9 +1910,6 @@ function drawMenu(){
   ctx.fillStyle=tg; ctx.font='bold 28px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('🫧 泡泡花园',W/2,54);
   ctx.restore();
-  // 版本角标（确认加载到新版）
-  ctx.fillStyle='rgba(127,184,164,.55)'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('v0.9 · 神秘关卡',W-62,640);
   // 总星数进度条（圆润+发光轨道）
   const ts=totalStars(), max=LEVELS.length*3;
   ctx.save();
@@ -2025,12 +2028,17 @@ function drawMenu(){
   ctx.fillStyle= state.reduceMotion?'#8a6a20':'#7fb8a4'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(state.reduceMotion?'✓ 已减少动态':'减少动态',W-68,26);
   drawSoundBtn();
+  ctx.restore();   // 内容块居中结束
+  // 版本角标（贴画布底边，确认加载到新版）
+  ctx.fillStyle='rgba(127,184,164,.55)'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
+  ctx.textAlign='right'; ctx.fillText('v0.9 · 神秘关卡',W-10,H-8);
   drawPopups();
   drawToast();
 }
 /* ---------------- 每日挑战 / 成就馆 / 主题屋界面 ---------------- */
 function drawDailyScreen(){
   drawBG();
+  ctx.save(); ctx.translate(0, MY());   // 竖屏手机 H 变高：内容块整体垂直居中
   ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
   ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('← 返回',50,26);
@@ -2072,10 +2080,12 @@ function drawDailyScreen(){
   ctx.fillStyle='#a8bcb2'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText(done?'明天 0 点刷新新关卡':'通关后可获得「每日园丁」成就',W/2,502);
   drawSoundBtn();
+  ctx.restore();   // 内容块居中结束
   drawToast();
 }
 function drawAchScreen(){
   drawBG();
+  ctx.save(); ctx.translate(0, MY());   // 竖屏手机 H 变高：内容块整体垂直居中
   ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
   ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('← 返回',50,26);
@@ -2104,10 +2114,12 @@ function drawAchScreen(){
     ctx.textAlign='center';
   }
   drawSoundBtn();
+  ctx.restore();   // 内容块居中结束
   drawToast();
 }
 function drawThemesScreen(){
   drawBG();
+  ctx.save(); ctx.translate(0, MY());   // 竖屏手机 H 变高：内容块整体垂直居中
   ctx.fillStyle='rgba(255,255,255,.8)'; roundRect(12,10,76,30,15); ctx.fill();
   ctx.fillStyle='#5aa88f'; ctx.font='bold 14px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('← 返回',50,26);
@@ -2145,6 +2157,7 @@ function drawThemesScreen(){
     ctx.textAlign='center';
   }
   drawSoundBtn();
+  ctx.restore();   // 内容块居中结束
   drawToast();
 }
 function drawCustom(){
@@ -2246,6 +2259,7 @@ function drawEditor(){
 function drawResult(){
   drawGame();
   ctx.fillStyle='rgba(255,255,255,.88)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.translate(0, MY());   // 结算内容垂直居中
   ctx.textAlign='center'; ctx.textBaseline='middle';
   // 结算计时（用于星星逐个弹出与彩带）
   const now=performance.now()/1000;
@@ -2338,6 +2352,7 @@ function drawResult(){
     ctx.font='bold 16px "Segoe UI",system-ui,sans-serif';
     ctx.fillText(label,btn.x+btn.w/2,btn.y+btn.h/2+1);
   }
+  ctx.restore();   // 结算内容居中结束
   drawPopups();
   drawMysteryQuiz();   // 神秘关卡：结算后出选择题复盘（盖在最上层）
 }
@@ -2346,6 +2361,7 @@ function drawPopups(){
   if(!state.popups.length) return;
   const p=state.popups[0];
   ctx.fillStyle='rgba(40,70,60,.45)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.translate(0, MY());   // 弹窗垂直居中
   ctx.save();
   ctx.shadowColor='rgba(0,0,0,.25)'; ctx.shadowBlur=20; ctx.shadowOffsetY=6;
   ctx.fillStyle='#fffdf5'; roundRect(60,210,W-120,200,24); ctx.fill();
@@ -2365,10 +2381,11 @@ function drawPopups(){
   p.lines.forEach((ln,i)=>ctx.fillText(ln,W/2,330+i*22));
   ctx.fillStyle='#c8d7d0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('点按任意位置继续',W/2,392);
+  ctx.restore();   // 弹窗居中结束
 }
 /* 神秘彩蛋选择题：结算后复盘本关 bug（答对 +20 彩蛋分） */
 function mysteryQuizBoxes(){
-  const card={x:30,y:104,w:W-60,h:432};
+  const card={x:30,y:104+MY(),w:W-60,h:432};
   const opts=[];
   for(let i=0;i<4;i++) opts.push({x:card.x+22,y:card.y+92+i*68,w:card.w-44,h:56});
   return {card,opts};
@@ -2586,18 +2603,20 @@ function fit(){
   const vw=innerWidth, vh=innerHeight;
   const portrait = vh>vw;
   let s;
-  if(portrait && vw<W){           // 竖屏手机：宽度铺满，垂直居中（高度通常够）
-    s=vw/W;
+  if(portrait && vw<W){           // 竖屏手机：按屏幕比例拉高逻辑高度，画布刚好铺满全屏
+    H = Math.max(640, Math.min(1150, Math.round(W*vh/vw)));
+    s = vw/W;
   } else {
-    s=Math.min(vw/W, vh/H);
+    H = 640;
+    s = Math.min(vw/W, vh/H);
   }
   const dpr=Math.min(devicePixelRatio||1, 2);   // 上限2：画面清晰且省性能
   canvas.style.width=Math.round(W*s)+'px';
   canvas.style.height=Math.round(H*s)+'px';
   canvas.width=Math.round(W*dpr); canvas.height=Math.round(H*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  // 竖屏窄机把画布上移一点，视觉重心更居中
-  document.getElementById('stage').style.alignItems = (portrait && vh > H*s*1.15) ? 'flex-start' : 'center';
+  if(state && state.shooter) state.shooter.y=H-84;   // H 变化后炮口重新锚定到底部
+  document.getElementById('stage').style.alignItems='center';
 }
 addEventListener('resize',fit);
 addEventListener('orientationchange',()=>setTimeout(fit,120));
