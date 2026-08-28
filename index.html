@@ -543,9 +543,8 @@ function popGroup(keys){
      若上方完全堵死无法补位，则持续上飘出屏（消除 +20 分）。
    重泡泡（石头 S/炸弹 B）：不补位，抛物线抛出坠落（消除 +20 分）。 */
 function physicsSettle(){
-  // 第一遍：上浮补位（多轮直到稳定）
+  // 第一遍：上浮补位（多轮直到稳定；泡泡只向上飘，r 严格递减，不会死循环）
   let moved=true, guard=0;
-  const movedCells=new Set();   // 本次结算内每个泡泡至多移动一次（防同泡连环上飘/叠影）
   while(moved && guard<32){
     moved=false; guard++;
     const floating=findFloating();
@@ -559,12 +558,15 @@ function physicsSettle(){
         return nb!==undefined && !floatSet.has(key(nr,nc));
       });
     };
-    // 移动辅助：先作废该泡泡的旧补位动画（防跨发射叠影），再登记新动画并搬格子
+    // 移动辅助：先作废该泡泡的旧补位动画（防跨发射叠影），再登记新动画并搬格子；
+    // 若该泡泡本次结算已飘过一次（链式上浮），动画起点沿用最初位置，视觉一路顺滑不跳变
     const moveCell=(r,c,target,cell)=>{
+      const prev=state.floaters.find(f=>f.cell===cell);
+      const fx=prev?prev.fx:cellX(r,c), fy=prev?prev.fy:cellY(r);
       state.floaters=state.floaters.filter(f=>f.cell!==cell);
-      state.floaters.push({fx:cellX(r,c), fy:cellY(r), tx:cellX(target[0],target[1]), ty:cellY(target[0]), cell, t:0, fromK:key(r,c), toK:key(target[0],target[1])});
+      state.floaters.push({fx, fy, tx:cellX(target[0],target[1]), ty:cellY(target[0]), cell, t:0, fromK:key(r,c), toK:key(target[0],target[1])});
       delCell(r,c); setCellRaw(target[0],target[1],cell);
-      movedCells.add(cell); moved=true;
+      moved=true;
     };
     // (a) 单侧支撑上浮补位：左上/右上仅一侧有泡泡 → 轻泡飘进上方的空格（目标必须锚定邻接）
     const keys=Object.keys(state.cells).sort((a,b)=>{
@@ -576,7 +578,6 @@ function physicsSettle(){
       if(r<1) continue;                        // 顶行没有上侧
       const cell=getCell(r,c);
       if(!cell || cell.t==='S' || cell.t==='B') continue;   // 重物不上浮补位
-      if(movedCells.has(cell)) continue;       // 本次已动过，不再飘
       const ur=r-1;
       const slots = r%2===0 ? [[ur,c-1],[ur,c]] : [[ur,c],[ur,c+1]];
       const inb = slots.filter(([,cc])=> cc>=0 && cc<colsInRow(ur));
@@ -591,7 +592,6 @@ function physicsSettle(){
     for(const [r,c] of floating){
       const cell=getCell(r,c);
       if(!cell || cell.t==='S' || cell.t==='B') continue;      // 重物不补位
-      if(movedCells.has(cell)) continue;
       for(let ur=r-1; ur>=0 && ur>=r-3; ur--){
         let cand=null;
         for(const cc of [c-1,c,c+1]){
