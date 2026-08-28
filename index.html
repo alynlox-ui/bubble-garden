@@ -46,7 +46,7 @@ const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
 const SPEED = 600, BUOY = -3000;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
-const BOMB_SPEED = 600;           // 炸弹专用发射初速（炮弹级，配合 700 下坠加速度可砸到顶行）
+const BOMB_SPEED = 1000;           // 炸弹专用发射初速（主人调的，配合 600 下坠加速度可砸到顶行）
 const BOMB_RAD = 2.6 * R;
 
 const PALETTE = [
@@ -721,7 +721,7 @@ function afterSpecialHit(){ settleLanding(0); }
 function stepFlying(dt){
   const f=state.flying; if(!f) return;
   f.x+=f.vx*dt; f.y+=f.vy*dt;
-  f.vy+=(f.color==='B'?700:BUOY)*dt;    // 炸弹：700 向下加速（主人调的炮弹抛物线下砸）；其他泡泡照旧浮力上飘
+  f.vy+=(f.color==='B'?600:BUOY)*dt;    // 炸弹：600 向下加速（主人调的炮弹抛物线下砸）；其他泡泡照旧浮力上飘
   // 飞行拖尾：每帧留 2 个渐隐粒子（物理轨迹可视化）
   if(!state.reduceMotion){
     for(let i=0;i<2;i++){
