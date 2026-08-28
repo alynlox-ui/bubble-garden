@@ -225,7 +225,11 @@ function pickMysteryBug(){
   const pool=MYSTERY_BUGS.filter(b=>b.minLevel<=state.level);
   if(!pool.length) return null;
   const rng=mysteryRng();
-  const b=pool[(rng()*pool.length)|0];
+  // 固定对应关系：第5/10/15…50关分别对应 bug 池第1/2/3…10项。
+  // 不能随机抽，否则第50关可能抽不到 corruptText，玩家会误以为乱码没有同步。
+  const targetIndex=Math.floor(state.level/5)-1;
+  const b=MYSTERY_BUGS[Math.max(0,Math.min(MYSTERY_BUGS.length-1,targetIndex))];
+  // 干扰项可以来自尚未正式登场的 bug，但永远不能替换本关的正确 bug。
   const others=MYSTERY_BUGS.filter(x=>x!==b);
   for(let i=others.length-1;i>0;i--){ const j=(rng()*(i+1))|0; const t=others[i]; others[i]=others[j]; others[j]=t; }
   const opts=[b, ...others.slice(0,3)];
