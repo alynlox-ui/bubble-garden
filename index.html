@@ -719,7 +719,7 @@ function afterSpecialHit(){ settleLanding(0); }
 function stepFlying(dt){
   const f=state.flying; if(!f) return;
   f.x+=f.vx*dt; f.y+=f.vy*dt;
-  f.vy+=BUOY*dt;    // 浮力加速度：向上飘（让飞行轨迹呈弧线）
+  f.vy+=(f.color==='B'?2600:BUOY)*dt;    // 炸弹：2600 向下加速（炮弹抛物线下砸）；其他泡泡照旧浮力上飘
   // 飞行拖尾：每帧留 2 个渐隐粒子（物理轨迹可视化）
   if(!state.reduceMotion){
     for(let i=0;i<2;i++){
