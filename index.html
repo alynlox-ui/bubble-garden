@@ -45,7 +45,7 @@ const ED_TOP = 116;
 const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
-const SPEED = 300, BUOY = -3000;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
+const SPEED = 600, BUOY = -3000;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
 const BOMB_RAD = 2.6 * R;
 
 const PALETTE = [
@@ -537,16 +537,38 @@ function popGroup(keys){
   return {popped,dropped};
 }
 /* ---------- v0.7 物理引擎：悬空泡泡行为 ----------
-   轻泡泡（普通色/R/L/I）：失去支撑后上飘，向上找空格补位（保留在棋盘）；
+   单侧支撑（左上/右上仅一侧有泡泡）：轻泡上浮补位，飘进上方的空格里卡稳；
+   轻泡泡（普通色/R/L/I）：完全失去支撑后上飘，向上找空格补位（保留在棋盘）；
      若上方完全堵死无法补位，则持续上飘出屏（消除 +20 分）。
    重泡泡（石头 S/炸弹 B）：不补位，抛物线抛出坠落（消除 +20 分）。 */
 function physicsSettle(){
-  // 第一遍：轻泡上飘补位（多轮直到稳定）
+  // 第一遍：上浮补位（多轮直到稳定）
   let moved=true, guard=0;
-  while(moved && guard<12){
+  while(moved && guard<16){
     moved=false; guard++;
+    // (a) 单侧支撑上浮补位：左上/右上仅一侧有泡泡 → 轻泡飘进上方的空格
+    const keys=Object.keys(state.cells).sort((a,b)=>{
+      const [ra,ca]=parseKey(a), [rb,cb]=parseKey(b);
+      return ra-rb || ca-cb;                 // 自上而下扫描，高处的先卡稳
+    });
+    for(const k of keys){
+      const [r,c]=parseKey(k);
+      if(r<1) continue;                        // 顶行没有上侧
+      const cell=getCell(r,c);
+      if(!cell || cell.t==='S' || cell.t==='B') continue;   // 重物不上浮补位
+      const ur=r-1;
+      const slots = r%2===0 ? [[ur,c-1],[ur,c]] : [[ur,c],[ur,c+1]];
+      const inb = slots.filter(([,cc])=> cc>=0 && cc<colsInRow(ur));
+      if(inb.length<2) continue;               // 边缘只有一个上侧格，无空位可补
+      const occ = inb.filter(([rr,cc])=> getCell(rr,cc)!==undefined);
+      if(occ.length!==1) continue;             // 仅"恰有一侧支撑"才触发
+      const empty = inb.find(([rr,cc])=> getCell(rr,cc)===undefined);
+      state.floaters.push({fx:cellX(r,c), fy:cellY(r), tx:cellX(empty[0],empty[1]), ty:cellY(empty[0]), cell, t:0, fromK:key(r,c), toK:key(empty[0],empty[1])});
+      delCell(r,c); setCellRaw(empty[0],empty[1],cell);
+      moved=true;
+    }
+    // (b) 完全悬空的轻泡向上找空格补位（原逻辑）
     const floating=findFloating();
-    if(!floating.length) break;
     for(const [r,c] of floating){
       const cell=getCell(r,c);
       if(!cell) continue;
