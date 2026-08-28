@@ -36,7 +36,7 @@
    验证钩子：window.__GARDEN_TEST__
    ============================================================ */
 
-const W = 420, H = 640;
+const W = 420; let H = 640;   // H 在 fit() 里按手机屏幕比例动态拉伸（竖屏铺满全屏，桌面保持 640）
 const R = 25;
 const COLS = 8;
 const ROWH = R * Math.sqrt(3);
@@ -48,8 +48,16 @@ const SX = W / 2, SY = H - 84;
 const SHOT_MIN_X = W * 0.25, SHOT_MAX_X = W * 0.75;   // 炮口左右移动范围：底部宽度的一半（居中 105..315），高度固定
 const HUD_NX = W - 72, HUD_NY = H - 29;              // 「下一个」预览固定锚点（右下角 348,611：内容右缘 404=W-16、底缘 626=H-14，与左下角换按钮 16/14 边距镜像对称；不随炮口移动）
 const SPEED = 200, BUOY = -800;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
-const BOMB_SPEED = 900;           // 炸弹专用发射初速（主人调的 900，配合 1000 下坠加速度）
+const BOMB_SPEED = 900;           // 炸弹专用发射初速下限（主人调的 900；bombSpeed() 按屏高补足，配合 1100 下坠加速度）
 const BOMB_RAD = 2.6 * R;
+/* 菜单/静态页垂直居中偏移：桌面 H=640 时为 0，手机竖屏随 H 拉伸居中内容块 */
+function MY(){ return Math.max(0,(H-640)/2); }
+/* 炸弹初速：屏幕越高发射点越低，按抛物线公式补足初速，保持顶点恒在 y=188
+   （H=640 时恰为 900=主人手调值；以手调值为下限，只加不减） */
+function bombSpeed(){
+  const rise=(H-84)-188;
+  return Math.max(BOMB_SPEED, Math.round(Math.sqrt(2*1100*Math.max(1,rise))));
+}
 
 const PALETTE = [
   { main:'#ff9eb5', light:'#ffd3de', dark:'#e5718f' },
@@ -155,7 +163,7 @@ function startDaily(seedOverride){
       setCellRaw(r,c,makeCell(t));
     }
   };
-  place('I',def.ice); place('B',def.bomb);
+  place('I',def.ice);   // 炸弹仅发射出现（每日挑战不再往棋盘塞炸弹泡）
   if(def.ice) maybeIntro('I');
   if(def.bomb) maybeIntro('B');
   if(def.rate>0){ maybeIntro('R'); maybeIntro('L'); }
@@ -168,6 +176,7 @@ function startDaily(seedOverride){
   state.isNewBest=false; state.lastBonus=0;
   state.floaters=[]; state.trail=[];
   state.hintT=4.5;
+  state.mysteryBug=null; state.mysteryQuiz=null;   // 每日挑战没有神秘彩蛋
   initQueue();
   state.screen='game';
 }
@@ -188,7 +197,7 @@ const LEVELS = (()=>{
     const colors= n===1?1 : n<=8?3 : n<=18?4 : n<=30?5 : 6;   // 第1关教学：单色必消
     const ice   = n<7 ?0 : Math.min(4, 1+Math.floor((n-7)/8));
     const stone = n<12?0 : Math.min(3, 1+Math.floor((n-12)/12));
-    const bomb  = n<12?0 : Math.min(3, 1+Math.floor((n-12)/12));   // 与石头同步登场，保证每关炸弹≥石头
+    const bomb  = n<12?0 : Math.min(3, 1+Math.floor((n-12)/12));   // 仅发射出现：本关发射队列会补给炸弹（炸石头），棋盘不生成炸弹泡
     const rate  = n<6 ?0 : Math.min(.12, .04+t*.08);
     const swaps = n<=2?1 : n<=10?2 : n<=22?3 : n<=38?4 : 5;
     let maxRows=0, cap=0;                                // 行数刚好容纳 count
@@ -199,6 +208,48 @@ const LEVELS = (()=>{
   return arr;
 })();
 const SAVE_KEY = 'bubble-garden-demo-v2';
+
+/* ============================================================
+   神秘关卡系统（彩蛋）：第 5/10/15/20/25/30/35/40/45/50 关
+   「神秘」关卡 = 正常机制 + 一个不影响通关的诡异小彩蛋。
+   进入关卡前提示「这个关卡很神秘哦~~」，通关后出一道选择题，
+   让玩家选出本关的诡异 bug（选对得 20 分彩蛋分）。
+   彩蛋全部是纯视觉/音效层，不影响物理、消除、胜负判定。
+   ============================================================ */
+function isMysteryLevel(n){ return state.mode==='official' && n%5===0; }
+/* bug 池：每个彩蛋用独立随机源取种子，保证每局重现一致（同关同 bug 同选项） */
+function mysteryRng(){ return mulberry32(state.level*104729+3); }
+function pickMysteryBug(){
+  const pool=MYSTERY_BUGS.filter(b=>b.minLevel<=state.level);
+  if(!pool.length) return null;
+  const rng=mysteryRng();
+  const b=pool[(rng()*pool.length)|0];
+  const others=MYSTERY_BUGS.filter(x=>x!==b);
+  for(let i=others.length-1;i>0;i--){ const j=(rng()*(i+1))|0; const t=others[i]; others[i]=others[j]; others[j]=t; }
+  const opts=[b, ...others.slice(0,3)];
+  for(let i=opts.length-1;i>0;i--){ const j=(rng()*(i+1))|0; const t=opts[i]; opts[i]=opts[j]; opts[j]=t; }
+  return { bug:b, options:opts };
+}
+/* 视觉分支辅助：神秘 bug 仅在官方关卡的 game/result 画面生效 */
+function mysteryOn(id){ return state.mysteryBug===id && (state.screen==='game'||state.screen==='result'); }
+/* 每个彩蛋：minLevel 首次出现关卡 / name 选择题文案 / desc 开场提示文案
+   id 对应绘制代码里的表现分支（全部纯视觉/音效，不影响逻辑） */
+const MYSTERY_BUGS=[
+  { id:'countdown',    minLevel:5,  name:'泡泡在倒着数',      desc:'泡泡倒着数数，树也倒着长…' },
+  { id:'creepyShake',  minLevel:10, name:'背景在诡异抖动',    desc:'背景开始诡异抖动，云也在发抖…' },
+  { id:'googly',       minLevel:15, name:'泡泡都在斜眼看你',  desc:'泡泡都在斜眼看你，盯得心里发毛…' },
+  { id:'bgmReversed',  minLevel:20, name:'BGM 在倒放',        desc:'背景音乐倒着放，音效也变得怪怪的…' },
+  { id:'gunShake',     minLevel:25, name:'枪头在抖动',        desc:'枪头在轻微抖动，像在害怕什么…' },
+  { id:'wink',         minLevel:30, name:'星星偷偷眨眼睛',    desc:'星星偷偷眨眼睛，天空变得不对劲…' },
+  { id:'rainbowShift', minLevel:35, name:'彩虹泡在变色',      desc:'彩虹泡泡开始自己变色，变得诡异…' },
+  { id:'inverted',     minLevel:40, name:'背景倒过来了',      desc:'背景倒过来了！世界颠倒了…' },
+  { id:'shadowCreep',  minLevel:45, name:'影子在悄悄移动',    desc:'影子在悄悄移动，泡泡的影子不对劲…' },
+  { id:'silentScream', minLevel:50, name:'泡泡在无声尖叫',    desc:'泡泡在无声尖叫，空气都凝固了…' },
+];
+function mysteryBugInfo(id){ return MYSTERY_BUGS.find(b=>b.id===id)||null; }
+/* 结算后选择题状态 */
+const state_MYSTERY_QUIZ={ visible:false, q:null, answered:false, pick:-1 };
+
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -238,6 +289,7 @@ const state = {
   encourage:'',        // 失败鼓励语
   shooter:{x:W/2, y:H-84},                                  // 发射炮口（可拖动）
   draggingShooter:false,                                     // 是否正在拖炮口
+  gunAngle:0,                                                // 泡泡枪旋转角（枪头追随瞄准方向，平滑插值）
   floaters:[],                                               // 上飘补位动画 {fx,fy,tx,ty,cell,t}
   trail:[],                                                  // 飞行拖尾粒子
   hintT:0,                                                   // 炮口拖动提示计时（首次进关显示）
@@ -247,6 +299,8 @@ const state = {
   toast:null, toastT:0,
   customLevels:[],
   editor:{ cells:{}, shots:12, brush:0, dragging:false },
+  mysteryBug:null,             // 当前神秘关卡的 bug id（官方第5/10/15…关；其他关卡为 null）
+  mysteryQuiz:null,            // 结算选择题 {question,options,correct,picked,answered}
 };
 let audioCtx=null, saveAcc=0;
 
@@ -285,6 +339,23 @@ function tone(f,d,type,vol,delay){ if(state.muted) return; const a=ac(); if(!a) 
   g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(vol||.1,t0+.012); g.gain.exponentialRampToValueAtTime(.0001,t0+d);
   o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0+d+.05); }
 function sfxShoot(){ tone(520,.1,'sine',.06); }
+/* BGM 在倒放：一段从高到低的"倒放感"怪音（神秘 bug，纯音效） */
+function sfxReversedMystery(){
+  if(state.muted) return;
+  const a=ac(); if(!a) return;
+  const t0=a.currentTime;
+  for(let i=0;i<4;i++){
+    const o=a.createOscillator(), g=a.createGain();
+    o.type='sine';
+    const f0=520-i*90;
+    o.frequency.setValueAtTime(f0,t0+i*.22);
+    o.frequency.exponentialRampToValueAtTime(Math.max(40,f0*.4),t0+i*.22+.8);
+    g.gain.setValueAtTime(0,t0+i*.22);
+    g.gain.linearRampToValueAtTime(.05,t0+i*.22+.06);
+    g.gain.exponentialRampToValueAtTime(.0001,t0+i*.22+.85);
+    o.connect(g); g.connect(a.destination); o.start(t0+i*.22); o.stop(t0+i*.22+1);
+  }
+}
 function sfxPop(n){ for(let i=0;i<Math.min(n,5);i++) tone(600+i*110,.12,'triangle',.08,i*.04); }
 function sfxBoom(){ tone(70,.35,'sine',.16); tone(140,.25,'sawtooth',.05,.03); }
 function sfxZap(){ tone(1200,.18,'sawtooth',.05,0,300); }
@@ -313,7 +384,7 @@ function buildLevel(n){
       setCellRaw(r,c,makeCell(t));
     }
   };
-  place('I',L.ice); place('S',L.stone); place('B',L.bomb);
+  place('I',L.ice); place('S',L.stone);   // 炸弹仅发射出现（棋盘不再生成炸弹泡）
   state.specialRate=L.rate;
   state.shotsLeft=L.shots;
   state.swapsLeft=L.swaps;
@@ -323,6 +394,16 @@ function buildLevel(n){
   state.isNewBest=false; state.lastBonus=0;
   state.floaters=[]; state.trail=[];
   state.hintT=4.5;   // 进关提示「炮口可拖动」
+  // 神秘关卡（官方第 5/10/15…关）：选一个不影响通关的诡异 bug，开场情报卡提示 + 结算选择题
+  state.mysteryQuiz=null;
+  if(isMysteryLevel(n)){
+    const m=pickMysteryBug();
+    state.mysteryBug=m.bug.id;
+    state.mysteryQuiz={ question:'本关的神秘彩蛋是哪个？', options:m.options.map(o=>o.name), correct:m.bug.name, picked:-1, answered:false };
+    if(m.bug.id==='bgmReversed') sfxReversedMystery();   // 开场就倒放
+  } else {
+    state.mysteryBug=null;
+  }
   // 首次登场的新属性泡泡 → 屏幕弹介绍（已看过的类型不再打扰）
   if(L.ice) maybeIntro('I');
   if(L.stone) maybeIntro('S');
@@ -335,6 +416,7 @@ function buildCustom(def){
   state.cells={};
   for(const it of def.cells){
     if(it.t===undefined || it.t===null) continue;
+    if(it.t==='B') continue;   // 炸弹仅发射出现：旧存档里的棋盘炸弹泡直接忽略
     if(it.t==='I') setCellRaw(it.r,it.c,{t:'I',hp:it.hp||2});
     else setCellRaw(it.r,it.c,{t:it.t});
   }
@@ -354,6 +436,7 @@ function buildCustom(def){
   state.isNewBest=false; state.lastBonus=0;
   state.floaters=[]; state.trail=[];
   state.hintT=4.5;
+  state.mysteryBug=null; state.mysteryQuiz=null;   // 自制关卡没有神秘彩蛋
   initQueue();
 }
 function presentNormalColors(){
@@ -542,16 +625,16 @@ function popGroup(keys){
   return {popped,dropped};
 }
 /* ---------- v0.7 物理引擎：悬空泡泡行为 ----------
-   单侧支撑（左上/右上仅一侧有泡泡）：轻泡上浮补位，飘进上方的空格里卡稳；
-   轻泡泡（普通色/R/L/I）：完全失去支撑后上飘，向上找空格补位（保留在棋盘）；
-     若上方完全堵死无法补位，则持续上飘出屏（消除 +20 分）。
-   重泡泡（石头 S/炸弹 B）：不补位，抛物线抛出坠落（消除 +20 分）。 */
+   任意不位于天花板且左上/右上任意一侧无泡泡 → 向无泡泡阻碍的方向飘动（一路飘），
+     直到上方两侧均有泡泡或到达天花板才停；每轮一格、多轮迭代，链式一路飘到卡稳。
+   完全悬空且上方两侧均被堵死的浮空岛 → 物理动画离开棋盘并消除（+20 分）。
+   重泡泡（石头 S/炸弹 B）：不补位，抛物线抛出坠落（消除 +20 分）。
+   炸弹仅在发射中出现：棋盘不生成炸弹泡，只有发射队列/发射中才有。 */
 function physicsSettle(){
   // 第一遍：上浮补位（多轮直到稳定；泡泡只向上飘，r 严格递减，不会死循环）
   let moved=true, guard=0;
   while(moved && guard<32){
     moved=false; guard++;
-    const floating=findFloating();
     // 移动辅助：先作废该泡泡的旧补位动画（防跨发射叠影），再登记新动画并搬格子；
     // 若该泡泡本次结算已飘过一次（链式上浮），动画起点沿用最初位置，视觉一路顺滑不跳变
     const moveCell=(r,c,target,cell)=>{
@@ -562,8 +645,8 @@ function physicsSettle(){
       delCell(r,c); setCellRaw(target[0],target[1],cell);
       moved=true;
     };
-    // (a) 上浮补位：左上/右上任意一侧没有泡泡 → 轻泡飘进上方的空格，一路上飘直到卡稳
-    //    （每轮一格、多轮迭代：飘到新位置若仍单侧/双侧无支撑则继续飘，最终停在顶行或上侧全满处）
+    // (a) 上浮补位：左上/右上任意一侧没有泡泡 → 轻泡向无泡泡阻碍的方向飘进上方空格，
+    //    一路飘到上方两侧均有泡泡或到达天花板才停（每轮一格、多轮迭代，链式上浮）
     const keys=Object.keys(state.cells).sort((a,b)=>{
       const [ra,ca]=parseKey(a), [rb,cb]=parseKey(b);
       return ra-rb || ca-cb;                 // 自上而下扫描，高处的先卡稳
@@ -578,20 +661,8 @@ function physicsSettle(){
       const inb = slots.filter(([,cc])=> cc>=0 && cc<colsInRow(ur));
       const occ = inb.filter(([rr,cc])=> getCell(rr,cc)!==undefined);
       if(occ.length>=inb.length) continue;     // 上侧全满（双侧支撑/边缘单侧支撑）→ 卡稳不动
-      const empty = inb.find(([rr,cc])=> getCell(rr,cc)===undefined);
-      moveCell(r,c,empty,cell);                // 上侧有空位 → 飘上去（目标不要求锚定，链式一路飘）
-    }
-    // (b) 完全悬空的轻泡向上找空格补位（每轮只搜上方 3 行内，多轮迭代一路飘，禁止一次长途穿越整面墙）
-    for(const [r,c] of floating){
-      const cell=getCell(r,c);
-      if(!cell || cell.t==='S' || cell.t==='B') continue;      // 重物不补位
-      for(let ur=r-1; ur>=0 && ur>=r-3; ur--){
-        let cand=null;
-        for(const cc of [c-1,c,c+1]){
-          if(cc>=0 && cc<colsInRow(ur) && getCell(ur,cc)===undefined){ cand=[ur,cc]; break; }
-        }
-        if(cand){ moveCell(r,c,cand,cell); break; }
-      }
+      const empty = inb.find(([rr,cc])=> getCell(rr,cc)===undefined);   // 空的那侧 = 无泡泡阻碍的方向
+      moveCell(r,c,empty,cell);                // 飘上去（目标不要求锚定，链式一路飘）
     }
   }
   // 第二遍：仍未补位的（轻泡堵死 / 重物）→ 物理动画离开棋盘并消除
@@ -727,7 +798,7 @@ function afterSpecialHit(){ physicsSettle(); settleLanding(0); }
 function stepFlying(dt){
   const f=state.flying; if(!f) return;
   f.x+=f.vx*dt; f.y+=f.vy*dt;
-  f.vy+=(f.color==='B'?1000:BUOY)*dt;    // 炸弹：1000 向下加速（主人调的炮弹抛物线下砸）；其他泡泡照旧浮力上飘
+  f.vy+=(f.color==='B'?1100:BUOY)*dt;    // 炸弹：1100 向下加速（配合 bombSpeed 抛物线顶点 y=188）；其他泡泡照旧浮力上飘
   // 飞行拖尾：每帧留 2 个渐隐粒子（物理轨迹可视化）
   if(!state.reduceMotion){
     for(let i=0;i<2;i++){
@@ -817,7 +888,7 @@ function load(){ try{
 }catch(e){} }
 
 /* ---------------- 创意工坊 ---------------- */
-const BRUSHES=[0,1,2,3,4,5,'R','B','L','I','S','E'];
+const BRUSHES=[0,1,2,3,4,5,'R','L','I','S','E'];   // 无炸弹笔刷：炸弹仅发射出现
 function edCellAt(x,y){
   for(let r=0;r<ED_ROWS;r++){
     for(let c=0;c<colsInRow(r);c++){
@@ -858,11 +929,9 @@ function validateCustomDef(def){
   // 步数下限：理论最少发数
   const minShots=Math.ceil(normals.length/3)+Math.ceil(specials.length/2);
   if(def.shots<minShots) issues.push('步数 '+def.shots+' 不足（理论最少 '+minShots+' 步）');
-  // 石头必须有炸弹可炸
+  // 石头必须有炸弹可炸（炸弹仅发射出现：发射队列 hasStones 时自动保底补炸弹，无需棋盘炸弹）
   const hasStone=specials.some(it=>it.t==='S');
-  const hasBomb=specials.some(it=>it.t==='B');
-  if(hasStone && !hasBomb) issues.push('有石头但没有炸弹，石头无法清除');
-  if(hasBomb && specials.every(it=>it.t!=='S') && !hasStone && specials.length>0 && normals.length<3) issues.push('炸弹无法独立通关，需要普通泡泡');
+  if(hasStone && def.shots<2) issues.push('步数太紧张：石头至少要等发射队列补出炸弹');
   return issues;
 }
 function saveCustom(){
@@ -1061,6 +1130,24 @@ function handleDown(p){
     return;
   }
   if(state.screen==='result'){
+    // 神秘彩蛋选择题：未作答时只能点选项；作答后点任意位置关闭复盘
+    const mq=state.mysteryQuiz;
+    if(mq){
+      if(!mq.answered){
+        const {opts}=mysteryQuizBoxes();
+        for(let i=0;i<4;i++){
+          if(inBox(p,opts[i])){
+            mq.picked=i; mq.answered=true; mq.correctPick = mq.options[i]===mq.correct;
+            if(mq.correctPick){ state.score+=20; tone(880,.1,'triangle',.08); tone(1175,.14,'triangle',.07,.08); }
+            else { tone(220,.25,'sine',.08); }
+            return;
+          }
+        }
+        return;   // 未点中选项时忽略其它点击（防误触跳过）
+      }
+      state.mysteryQuiz=null;   // 已作答：点任意位置关闭复盘
+      return;
+    }
     for(const [btn,act] of resultButtons()){
       if(inBox(p,btn)){ act(); return; }
     }
@@ -1080,9 +1167,9 @@ function handleDown(p){
       return;
     }
     if(inBack(p)){ state.screen= state.mode==='test' ? 'editor' : state.mode==='custom' ? 'custom' : state.mode==='daily' ? 'daily' : 'menu'; return; }
-    // 按住炮口区域 → 进入拖动模式（移动吐出点），不瞄准
+    // 按住泡泡枪区域 → 进入拖动模式（移动吐出点），不瞄准（命中区贴合枪形：枪管顶到握把底）
     const ddx=p.x-state.shooter.x, ddy=p.y-state.shooter.y;
-    if(ddx*ddx+ddy*ddy <= 46*46 && !state.flying){
+    if(Math.abs(ddx)<=56 && ddy>=-36 && ddy<=58 && !state.flying){
       state.draggingShooter=true;
       state.aim.valid=false;
       return;
@@ -1154,6 +1241,13 @@ function drawBubble(x,y,r,ci,alpha){
   const soft=ctx.createRadialGradient(x,y+r*.25,r*.1,x,y,r);
   soft.addColorStop(0,'rgba(255,255,255,.28)'); soft.addColorStop(.55,'rgba(255,255,255,0)');
   ctx.fillStyle=soft; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  // 影子在悄悄移动：泡泡底下多出一团不规则暗影（神秘 bug）
+  if(mysteryOn('shadowCreep')){
+    const tt=performance.now()/1000;
+    const ox=Math.sin(tt*1.3)*r*.55, oy=Math.cos(tt*.9)*r*.35;
+    ctx.fillStyle='rgba(30,20,45,.22)';
+    ctx.beginPath(); ctx.ellipse(x+ox,y+oy,r*1.1,r*.75,0,0,Math.PI*2); ctx.fill();
+  }
   // 主体渐变
   const g=ctx.createRadialGradient(x-r*.32,y-r*.34,r*.08,x,y,r);
   g.addColorStop(0,P.light); g.addColorStop(.55,P.main); g.addColorStop(1,P.dark);
@@ -1172,8 +1266,35 @@ function drawBubble(x,y,r,ci,alpha){
   // 底部月牙反光
   ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=1.2;
   ctx.beginPath(); ctx.arc(x,y,r*.82,.9,2.2); ctx.stroke();
+  // 泡泡都在斜眼看你：两只斜视的眼睛（神秘 bug）
+  if(mysteryOn('googly')) drawGooglyEyes(x,y,r);
+  // 泡泡在无声尖叫：一张张开的嘴（神秘 bug）
+  else if(mysteryOn('silentScream')) drawScreamMouth(x,y,r);
   ctx.restore();
 }
+/* 神秘彩蛋视觉：斜视的眼睛（瞳孔朝向炮口/缓慢游走） */
+function drawGooglyEyes(x,y,r){
+  const tt=performance.now()/1000;
+  const ang=Math.atan2(state.shooter.y-y, state.shooter.x-x)+Math.sin(tt*.8)*.4;
+  const ox=Math.cos(ang)*r*.2, oy=Math.sin(ang)*r*.2;
+  const er=Math.max(2.5,r*.21);
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(x-r*.32,y-r*.14,er,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x+r*.32,y-r*.14,er,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#2c3037';
+  ctx.beginPath(); ctx.arc(x-r*.32+ox,y-r*.14+oy,er*.5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x+r*.32+ox,y-r*.14+oy,er*.5,0,Math.PI*2); ctx.fill();
+}
+/* 神秘彩蛋视觉：无声尖叫的嘴（颤抖的黑色椭圆） */
+function drawScreamMouth(x,y,r){
+  const tt=performance.now()/1000;
+  const wob=Math.sin(tt*9)*r*.05;
+  ctx.fillStyle='#2c3037';
+  ctx.beginPath(); ctx.ellipse(x,y+r*.3,r*.22,r*.3+wob,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#e5718f';
+  ctx.beginPath(); ctx.ellipse(x,y+r*.36,r*.09,r*.12,0,0,Math.PI*2); ctx.fill();
+}
+
 function drawCellShape(x,y,r,cell,alpha){
   const t=cell.t;
   if(typeof t==='number') return drawBubble(x,y,r,t,alpha);
@@ -1182,9 +1303,11 @@ function drawCellShape(x,y,r,cell,alpha){
     const g=ctx.createRadialGradient(x-r*.3,y-r*.3,r*.1,x,y,r);
     g.addColorStop(0,'#ffffff'); g.addColorStop(1,'#e6e0f5');
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    // 彩虹泡在变色：彩色环持续旋转变色（神秘 bug，纯视觉）
+    const rot = mysteryOn('rainbowShift') ? (performance.now()/1000)*2.2 : 0;
     for(let i=0;i<6;i++){
-      ctx.strokeStyle=PALETTE[i].main; ctx.lineWidth=3.5;
-      ctx.beginPath(); ctx.arc(x,y,r-3.5,i*Math.PI/3+.15,(i+1)*Math.PI/3-.15); ctx.stroke();
+      ctx.strokeStyle=PALETTE[(i+Math.floor(rot*2))%6].main; ctx.lineWidth=3.5;
+      ctx.beginPath(); ctx.arc(x,y,r-3.5,i*Math.PI/3+.15+rot,(i+1)*Math.PI/3-.15+rot); ctx.stroke();
     }
     ctx.fillStyle='rgba(255,255,255,.8)';
     ctx.beginPath(); ctx.ellipse(x-r*.3,y-r*.35,r*.18,r*.11,-.6,0,Math.PI*2); ctx.fill();
@@ -1236,6 +1359,14 @@ function drawCellShape(x,y,r,cell,alpha){
 function curTheme(){ return THEMES.find(t=>t.id===state.themeCurrent)||THEMES[0]; }
 function drawBG(){
   const TH=curTheme();
+  const tbg=performance.now()/1000;
+  // 背景在诡异抖动：整体低频颤抖（神秘 bug，纯视觉）
+  const jx = mysteryOn('creepyShake') ? (Math.sin(tbg*31)*3+Math.sin(tbg*53+1)*2) : 0;
+  const jy = mysteryOn('creepyShake') ? (Math.cos(tbg*37)*3+Math.cos(tbg*61+2)*2) : 0;
+  ctx.save();
+  ctx.translate(jx,jy);
+  // 背景倒过来了：世界上下颠倒（神秘 bug，纯视觉）
+  if(mysteryOn('inverted')){ ctx.translate(0,H); ctx.scale(1,-1); }
   const g=ctx.createLinearGradient(0,0,0,H);
   g.addColorStop(0,TH.sky[0]); g.addColorStop(.45,TH.sky[1]); g.addColorStop(1,TH.sky[2]);
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
@@ -1254,16 +1385,27 @@ function drawBG(){
     }
   }
   if(TH.deco==='stars'){
-    // 星夜：闪烁星星 + 月亮
+    // 星夜：闪烁星星 + 月亮（神秘 bug：星星偷偷眨眼睛——部分星星忽明忽暗）
+    const wink=mysteryOn('wink');
     for(let i=0;i<24;i++){
       const sx=(i*97+31)%W, sy=(i*53+17)%180+10;
-      const tw=.4+.6*Math.abs(Math.sin(t*1.5+i));
+      let tw=.4+.6*Math.abs(Math.sin(t*1.5+i));
+      if(wink && i%3===0){ tw = Math.abs(Math.sin(t*5+i*2))>.3 ? .9 : .05; }   // 眨眼节奏异常
       ctx.globalAlpha=tw; ctx.fillStyle='#fff8dc';
       ctx.beginPath(); ctx.arc(sx,sy,i%4===0?2.2:1.3,0,Math.PI*2); ctx.fill();
     }
     ctx.globalAlpha=1;
-    ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=TH.sky[0]; ctx.beginPath(); ctx.arc(342,64,18,0,Math.PI*2); ctx.fill();
+    if(wink){
+      // 月亮也变成一只眼睛（眨眼）
+      const open=Math.abs(Math.sin(t*2.3))>.25;
+      ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#2c3037';
+      if(open){ ctx.beginPath(); ctx.arc(350,70,6,0,Math.PI*2); ctx.fill(); }
+      else { ctx.lineWidth=3; ctx.strokeStyle='#2c3037'; ctx.beginPath(); ctx.moveTo(340,70); ctx.lineTo(360,70); ctx.stroke(); }
+    } else {
+      ctx.fillStyle='#fff3c4'; ctx.beginPath(); ctx.arc(350,70,22,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle=TH.sky[0]; ctx.beginPath(); ctx.arc(342,64,18,0,Math.PI*2); ctx.fill();
+    }
   }
   if(TH.deco==='petals'){
     // 樱花雨：飘落花瓣
@@ -1296,6 +1438,7 @@ function drawBG(){
     }
   }
   ctx.globalAlpha=1;
+  ctx.restore();
 }
 /* 第1关新手教程：游戏内逐步引导（瞄准→发射→消除→通关） */
 function drawTutorial(){
@@ -1336,7 +1479,15 @@ function drawHUD(){
   const low=state.shotsLeft<=3;
   const breath=low? .7+.3*Math.sin(performance.now()/220) : 1;
   ctx.fillStyle= low?'rgba(229,113,143,'+breath+')':'#5aa88f'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('剩余 '+state.shotsLeft+' 步',67,60);
+  // 泡泡在倒着数：剩余步数倒序/乱码显示（神秘 bug，纯视觉，不影响真实步数逻辑）
+  let shotsTxt=String(state.shotsLeft);
+  if(mysteryOn('countdown')){
+    const cc=performance.now()/1000, cyc=cc%3;
+    shotsTxt = cyc<1 ? shotsTxt.split('').reverse().join('')
+      : cyc<2 ? '▓▒░'+(shotsTxt.length>1?'░▒▓':'')
+      : shotsTxt;
+  }
+  ctx.fillText('剩余 '+shotsTxt+' 步',67,60);
   // 标题 + 得分（居中带投影）
   ctx.save();
   ctx.shadowColor='rgba(255,255,255,.85)'; ctx.shadowBlur=6;
@@ -1377,22 +1528,73 @@ function drawAim(){
 const SWAP_BTN = { x:16, y:H-56, w:64, h:42 };   // 底部固定（不随炮口移动）
 function swapBtn(){ return { x:16, y:H-56, w:64, h:42 }; }
 function drawShooter(){
-  const SX=state.shooter.x, SY=state.shooter.y;
-  // 发射托架：柔和的弧形底座（像花盆/弹弓口）
-  ctx.save();
-  const g=ctx.createLinearGradient(0,SY-8,0,SY+40);
-  g.addColorStop(0,'#e6f3ec'); g.addColorStop(1,'#c2e2d3');
-  ctx.fillStyle=g;
-  ctx.beginPath();
-  ctx.moveTo(SX-52,SY-6);
-  ctx.quadraticCurveTo(SX-56,SY+22,SX-46,SY+40);
-  ctx.quadraticCurveTo(SX,SY+52,SX+46,SY+40);
-  ctx.quadraticCurveTo(SX+56,SY+22,SX+52,SY-6);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2; ctx.stroke();
-  // 底座细投影
+  // 枪头在抖动：泡泡枪轻微颤抖（神秘 bug，纯视觉；不改变 state.shooter 逻辑坐标）
+  const gsh = mysteryOn('gunShake') ? (Math.sin(performance.now()/18)*2.5) : 0;
+  const SX=state.shooter.x+gsh, SY=state.shooter.y+(mysteryOn('gunShake')?Math.cos(performance.now()/23)*2:0);
+  // ── 泡泡枪建模（v0.8r）：枪头跟随瞄准方向平滑旋转（±71.6° 钳制防翻转，无瞄准回正朝上） ──
+  let targetA=0;
+  if(state.aim.valid && (state.aim.y-SY)<0){
+    targetA=Math.atan2(state.aim.y-SY,state.aim.x-SX)+Math.PI/2;   // 默认枪口朝上(-π/2)，转到瞄准角
+    targetA=Math.max(-1.25,Math.min(1.25,targetA));
+  }
+  state.gunAngle+=(targetA-state.gunAngle)*0.28;                   // 平滑追随
+  if(targetA===0 && Math.abs(state.gunAngle)<0.004) state.gunAngle=0;
+  const GA=state.gunAngle;
+  // 地面投影（静态，不随枪旋转）
   ctx.fillStyle='rgba(120,180,160,.25)';
-  ctx.beginPath(); ctx.ellipse(SX,SY+44,44,7,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(SX,SY+52,34,6,0,0,Math.PI*2); ctx.fill();
+  // 整把枪绕炮口支点 (SX,SY) 旋转：枪头朝向发射方向
+  ctx.save();
+  ctx.translate(SX,SY); ctx.rotate(GA); ctx.translate(-SX,-SY);
+  // 握把（枪身右下方，圆润后倾）
+  ctx.beginPath();
+  ctx.moveTo(SX+4,SY+26);
+  ctx.quadraticCurveTo(SX+32,SY+28,SX+28,SY+44);
+  ctx.quadraticCurveTo(SX+26,SY+56,SX+14,SY+56);
+  ctx.quadraticCurveTo(SX+6,SY+56,SX+7,SY+44);
+  ctx.closePath();
+  const gg=ctx.createLinearGradient(SX,SY+26,SX,SY+56);
+  gg.addColorStop(0,'#dff2e8'); gg.addColorStop(1,'#a9d9c5');
+  ctx.fillStyle=gg; ctx.fill();
+  ctx.strokeStyle='#7fb8a4'; ctx.lineWidth=2; ctx.stroke();
+  // 枪身（圆润主体）
+  const bg=ctx.createLinearGradient(0,SY-4,0,SY+36);
+  bg.addColorStop(0,'#eaf7f0'); bg.addColorStop(1,'#b8decf');
+  ctx.fillStyle=bg;
+  roundRect(SX-48,SY-2,96,38,18); ctx.fill();
+  ctx.strokeStyle='#7fb8a4'; ctx.lineWidth=2; roundRect(SX-48,SY-2,96,38,18); ctx.stroke();
+  // 枪身高光条
+  ctx.fillStyle='rgba(255,255,255,.5)'; roundRect(SX-40,SY+3,80,7,3.5); ctx.fill();
+  // 透明泡泡罐（枪身左侧，装着彩色小泡泡）
+  ctx.fillStyle='rgba(255,255,255,.6)';
+  ctx.beginPath(); ctx.arc(SX-33,SY+10,19,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#8fc4ae'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(SX-33,SY+10,19,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle='#ffb3c6'; ctx.beginPath(); ctx.arc(SX-39,SY+14,3.5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffd97a'; ctx.beginPath(); ctx.arc(SX-30,SY+5,3,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#a8d8f0'; ctx.beginPath(); ctx.arc(SX-28,SY+15,2.5,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.75)'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.arc(SX-33,SY+10,14,-0.9,0.6); ctx.stroke();
+  // 枪管（竖直向上，怀抱当前泡）
+  const tg=ctx.createLinearGradient(SX-28,0,SX+28,0);
+  tg.addColorStop(0,'#cfe9dc'); tg.addColorStop(.5,'#f4fbf7'); tg.addColorStop(1,'#c3e3d4');
+  ctx.fillStyle=tg;
+  roundRect(SX-28,SY-8,56,44,12); ctx.fill();
+  ctx.strokeStyle='#8fc4ae'; ctx.lineWidth=2; roundRect(SX-28,SY-8,56,44,12); ctx.stroke();
+  // 枪管环纹
+  ctx.strokeStyle='rgba(127,184,164,.4)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(SX-24,SY+12); ctx.lineTo(SX+24,SY+12); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(SX-24,SY+20); ctx.lineTo(SX+24,SY+20); ctx.stroke();
+  // 扳机按钮（金色小圆点）
+  ctx.fillStyle='#f7d774'; ctx.beginPath(); ctx.arc(SX+12,SY+30,4.5,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#d9b64f'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(SX+12,SY+30,4.5,0,Math.PI*2); ctx.stroke();
+  // 枪口（椭圆开口，泡泡从中探出）
+  ctx.fillStyle='rgba(255,255,255,.9)';
+  ctx.beginPath(); ctx.ellipse(SX,SY-8,28,7,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#8fc4ae'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.ellipse(SX,SY-8,28,7,0,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle='rgba(127,184,164,.3)';
+  ctx.beginPath(); ctx.ellipse(SX,SY-8,20,4.5,0,0,Math.PI*2); ctx.fill();
   ctx.restore();
   drawCellShape(SX,SY,R-2,makeCell(state.cur));
   // 可拖动提示：呼吸光圈 + 左右箭头（首次进关更明显）
@@ -1416,7 +1618,7 @@ function drawShooter(){
       ctx.globalAlpha=Math.min(1,state.hintT);
       ctx.fillStyle='rgba(63,143,119,.95)'; roundRect(W/2-150,H-52,300,34,17); ctx.fill();
       ctx.fillStyle='#fff'; ctx.font='bold 13px "Segoe UI",system-ui,sans-serif';
-      ctx.fillText('⇔ 按住炮口左右拖动可移动',W/2,H-35);
+      ctx.fillText('⇔ 按住泡泡枪左右拖动可移动',W/2,H-35);
       ctx.globalAlpha=1;
     }
   }
@@ -1632,8 +1834,23 @@ function drawIntroOverlay(){
     ctx.fillStyle='#e8b84a'; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
     ctx.fillText('🎓 新手教程 · 单色教学关',W/2,146);
   }
-  // 关卡情报卡
-  const card={x:40,y:180,w:W-80,h:210};
+  // 神秘关卡开场横幅：紫色诡异提示（每 5 关）
+  if(state.mysteryBug){
+    const mt=performance.now()/1000;
+    const sway=Math.sin(mt*2.2)*3;
+    ctx.save();
+    ctx.shadowColor='rgba(138,106,208,.6)'; ctx.shadowBlur=10;
+    ctx.fillStyle='#8a6ad0'; ctx.font='bold 17px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('🔮 这个关卡很神秘哦~~',W/2+sway,152);
+    ctx.restore();
+    const info=mysteryBugInfo(state.mysteryBug);
+    ctx.fillStyle='#8a6ad0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('本关藏着一个不影响通关的小秘密，通关后答对选择题 +20 分',W/2,170);
+    ctx.fillStyle='rgba(138,106,208,.45)'; ctx.font='11px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('（提示：'+info.desc+'）',W/2,186);
+  }
+  // 关卡情报卡（神秘关卡被横幅占位，卡片稍下移）
+  const card = state.mysteryBug ? {x:40,y:196,w:W-80,h:204} : {x:40,y:180,w:W-80,h:210};
   ctx.fillStyle='rgba(255,255,255,.95)'; roundRect(card.x,card.y,card.w,card.h,22); ctx.fill();
   ctx.strokeStyle='#9fd0bc'; ctx.lineWidth=2.5; roundRect(card.x,card.y,card.w,card.h,22); ctx.stroke();
   const L=state.mode==='official'?LEVELS[state.level-1]:null;
@@ -1662,7 +1879,7 @@ function drawIntroOverlay(){
   if(state.mode==='official' && (L.ice||L.stone||L.bomb)){
     ctx.textAlign='center'; ctx.fillStyle='#a8bcb2'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
     const tags=[];
-    if(L.ice) tags.push('🧊 冰块'); if(L.stone) tags.push('🪨 石头'); if(L.bomb) tags.push('💣 炸弹');
+    if(L.ice) tags.push('🧊 冰块'); if(L.stone) tags.push('🪨 石头'); if(L.bomb) tags.push('💣 炸弹（发射）');
     ctx.fillText('本关特殊泡泡：'+tags.join(' · '),W/2,card.y+card.h-16);
   }
   // 开始按钮（呼吸光效）
@@ -1689,7 +1906,7 @@ function drawMenu(){
   ctx.restore();
   // 版本角标（确认加载到新版）
   ctx.fillStyle='rgba(127,184,164,.55)'; ctx.font='10px "Segoe UI",system-ui,sans-serif';
-  ctx.fillText('v0.8p · 底栏固定+横移炮口',W-62,640);
+  ctx.fillText('v0.9 · 神秘关卡',W-62,640);
   // 总星数进度条（圆润+发光轨道）
   const ts=totalStars(), max=LEVELS.length*3;
   ctx.save();
@@ -1757,6 +1974,11 @@ function drawMenu(){
     const best=state.bestMap[lv]||0;
     ctx.fillStyle='#b8c9c1'; ctx.font='9px "Segoe UI",system-ui,sans-serif';
     ctx.fillText(best?('最佳 '+best):'', x+bw/2, y+65);
+    // 神秘关卡标记（第 5/10/15…关）
+    if(!locked && lv%5===0){
+      ctx.fillStyle='#8a6ad0'; ctx.font='11px "Segoe UI",system-ui,sans-serif';
+      ctx.fillText('🔮', x+bw-11, y+12);
+    }
   }
   ctx.restore();
   // 连胜徽章
@@ -1829,7 +2051,7 @@ function drawDailyScreen(){
     ['🎈 场上泡泡', def.count+' 个'],
     ['🎨 颜色数', def.colors+' 种'],
     ['🧊 冰块', def.ice+' 个'],
-    ['💣 炸弹', def.bomb+' 个'],
+    ['💣 炸弹', '发射出现'],
     ['🎯 限步', def.shots+' 步'],
     ['🏆 今日最佳', done?String(state.dailyBest[d]||0)+' 分':'—'],
   ];
@@ -2117,6 +2339,7 @@ function drawResult(){
     ctx.fillText(label,btn.x+btn.w/2,btn.y+btn.h/2+1);
   }
   drawPopups();
+  drawMysteryQuiz();   // 神秘关卡：结算后出选择题复盘（盖在最上层）
 }
 /* 奖励弹窗（章节通关 / 新纪录 / 连胜里程碑），点按任意位置关闭 */
 function drawPopups(){
@@ -2142,6 +2365,57 @@ function drawPopups(){
   p.lines.forEach((ln,i)=>ctx.fillText(ln,W/2,330+i*22));
   ctx.fillStyle='#c8d7d0'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
   ctx.fillText('点按任意位置继续',W/2,392);
+}
+/* 神秘彩蛋选择题：结算后复盘本关 bug（答对 +20 彩蛋分） */
+function mysteryQuizBoxes(){
+  const card={x:30,y:104,w:W-60,h:432};
+  const opts=[];
+  for(let i=0;i<4;i++) opts.push({x:card.x+22,y:card.y+92+i*68,w:card.w-44,h:56});
+  return {card,opts};
+}
+function drawMysteryQuiz(){
+  const q=state.mysteryQuiz;
+  if(!q || state.screen!=='result') return;
+  const {card,opts}=mysteryQuizBoxes();
+  ctx.fillStyle='rgba(20,14,36,.72)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.save(); ctx.shadowColor='rgba(120,90,220,.4)'; ctx.shadowBlur=18; ctx.shadowOffsetY=5;
+  ctx.fillStyle='#2b2350'; roundRect(card.x,card.y,card.w,card.h,22); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle='#b9a5f0'; ctx.lineWidth=2.5; roundRect(card.x,card.y,card.w,card.h,22); ctx.stroke();
+  // 顶部装饰光点
+  ctx.fillStyle='rgba(185,165,240,.5)';
+  for(let i=0;i<6;i++){ ctx.beginPath(); ctx.arc(card.x+40+i*62,card.y+14,2+Math.sin(performance.now()/300+i)*1,0,Math.PI*2); ctx.fill(); }
+  ctx.fillStyle='#e8dfff'; ctx.font='bold 20px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText('🔮 神秘彩蛋揭秘',W/2,card.y+34);
+  ctx.fillStyle='#c9baf2'; ctx.font='14px "Segoe UI",system-ui,sans-serif';
+  ctx.fillText(q.question,W/2,card.y+62);
+  for(let i=0;i<4;i++){
+    const b=opts[i];
+    const isCorrect = q.answered && q.options[i]===q.correct;
+    const isPicked = q.picked===i;
+    let fill='rgba(70,55,112,.88)', stroke='rgba(185,165,240,.5)', tcol='#e8dfff';
+    if(q.answered){
+      if(isCorrect){ fill='rgba(76,175,147,.95)'; stroke='#7fd8b0'; tcol='#fff'; }
+      else if(isPicked){ fill='rgba(190,80,105,.95)'; stroke='#ff9eb5'; tcol='#fff'; }
+      else { fill='rgba(45,38,72,.6)'; tcol='rgba(220,210,245,.55)'; }
+    }
+    ctx.fillStyle=fill; roundRect(b.x,b.y,b.w,b.h,14); ctx.fill();
+    ctx.strokeStyle=stroke; ctx.lineWidth=(isCorrect||isPicked)?2.5:1.5; roundRect(b.x,b.y,b.w,b.h,14); ctx.stroke();
+    ctx.fillStyle=tcol; ctx.font='bold 15px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='left';
+    ctx.fillText('ABCD'[i]+'. '+q.options[i], b.x+16, b.y+b.h/2);
+  }
+  ctx.textAlign='center';
+  if(q.answered){
+    ctx.fillStyle= q.correctPick ? '#8ee6b8' : '#ffb3c6';
+    ctx.font='bold 15px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText(q.correctPick ? '🎉 答对啦！彩蛋分 +20' : '😈 猜错啦…神秘彩蛋是「'+q.correct+'」', W/2, card.y+card.h-54);
+    ctx.fillStyle='rgba(220,210,245,.6)'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('点按任意位置继续',W/2,card.y+card.h-28);
+  } else {
+    ctx.fillStyle='rgba(220,210,245,.55)'; ctx.font='12px "Segoe UI",system-ui,sans-serif';
+    ctx.fillText('选出一个你认为本关出现的诡异现象',W/2,card.y+card.h-28);
+  }
 }
 function drawToast(){
   if(state.toast && state.toastT>0){
@@ -2284,6 +2558,8 @@ window.__GARDEN_TEST__ = {
   goScreen(s){ state.screen=s; },
   /* ---- v0.7 物理系统：炮口拖动 / 补位 / 分类轨迹 ---- */
   shooterPos(){ return {x:state.shooter.x, y:state.shooter.y}; },
+  gunAngle(){ return state.gunAngle; },
+  setAim(x,y,valid){ state.aim.x=x; state.aim.y=y; state.aim.valid=valid!==false; },
   dragShooterTo(x,y){ state.shooter.x=Math.max(SHOT_MIN_X,Math.min(SHOT_MAX_X,x)); state.shooter.y=H-84; save(); return this.shooterPos(); },
   draggingShooterState(){ return state.draggingShooter; },
   floaters(){ return state.floaters.length; },
@@ -2291,6 +2567,17 @@ window.__GARDEN_TEST__ = {
   clickAt(x,y){ const r=canvas.getBoundingClientRect();
     canvas.dispatchEvent(new PointerEvent('pointerdown',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true}));
     canvas.dispatchEvent(new PointerEvent('pointerup',{clientX:r.left+x*r.width/W,clientY:r.top+y*r.height/H,bubbles:true})); },
+  /* ---- v0.9 神秘关卡：彩蛋 bug + 结算选择题 ---- */
+  isMysteryLevel(n){ return n%5===0 && n>=5 && n<=LEVELS.length; },
+  mysteryBugs(){ return MYSTERY_BUGS.map(b=>({id:b.id,minLevel:b.minLevel,name:b.name,desc:b.desc})); },
+  mysteryBug(){ return state.mysteryBug; },
+  mysteryPlan(n){ const old=state.level; state.level=n; const m=pickMysteryBug(); state.level=old; return m?{bug:m.bug.id,options:m.options.map(o=>o.name)}:null; },
+  mysteryQuiz(){ const q=state.mysteryQuiz; return q?{question:q.question,options:q.options.slice(),correct:q.correct,picked:q.picked,answered:q.answered,correctPick:q.correctPick}:null; },
+  answerMystery(i){ const q=state.mysteryQuiz; if(!q||q.answered||i<0||i>=4) return false;
+    q.picked=i; q.answered=true; q.correctPick = q.options[i]===q.correct;
+    if(q.correctPick){ state.score+=20; } return true; },
+  closeMysteryQuiz(){ if(state.mysteryQuiz) state.mysteryQuiz=null; },
+  setMysteryBug(id){ state.mysteryBug = MYSTERY_BUGS.some(b=>b.id===id) ? id : null; },
 };
 
 /* ---------------- 启动 ---------------- */
