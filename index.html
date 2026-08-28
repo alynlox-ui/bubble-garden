@@ -46,6 +46,7 @@ const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
 const SHOT_MIN_X = W * 0.25, SHOT_MAX_X = W * 0.75;   // 炮口左右移动范围：底部宽度的一半（居中 105..315），高度固定
+const HUD_NX = W - 96, HUD_NY = H - 106;              // 「下一个」预览固定锚点（底部右侧，不随炮口移动）
 const SPEED = 200, BUOY = -800;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
 const BOMB_SPEED = 900;           // 炸弹专用发射初速（主人调的，配合 600 下坠加速度可砸到顶行）
 const BOMB_RAD = 2.6 * R;
@@ -1433,7 +1434,7 @@ function drawShooter(){
     ctx.beginPath(); ctx.arc(SX,SY,38,0,Math.PI*2); ctx.stroke();
   }
   // 队列预览：接下来 3 发（大→小）——固定在底部右侧，不随炮口移动
-  const NX=W-96, NY=H-106;
+  const NX=HUD_NX, NY=HUD_NY;
   ctx.fillStyle='#7fb8a4'; ctx.font='11px "Segoe UI",system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('下一个',NX,NY-24);
   drawCellShape(NX,NY,15,makeCell(state.queue[0]??0),.95);
