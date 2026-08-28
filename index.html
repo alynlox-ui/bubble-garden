@@ -45,8 +45,8 @@ const ED_TOP = 116;
 const ED_ROWS = 9;
 const BOARD_LEFT = (W - COLS * 2 * R) / 2;
 const SX = W / 2, SY = H - 84;
-const SPEED = 600, BUOY = -3000;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
-const BOMB_SPEED = 1000;           // 炸弹专用发射初速（主人调的，配合 600 下坠加速度可砸到顶行）
+const SPEED = 200, BUOY = -800;   // 浮力加速度（向上，使飞行轨迹呈夸张上飘弧线）
+const BOMB_SPEED = 900;           // 炸弹专用发射初速（主人调的，配合 600 下坠加速度可砸到顶行）
 const BOMB_RAD = 2.6 * R;
 
 const PALETTE = [
@@ -545,9 +545,28 @@ function popGroup(keys){
 function physicsSettle(){
   // 第一遍：上浮补位（多轮直到稳定）
   let moved=true, guard=0;
-  while(moved && guard<16){
+  const movedCells=new Set();   // 本次结算内每个泡泡至多移动一次（防同泡连环上飘/叠影）
+  while(moved && guard<32){
     moved=false; guard++;
-    // (a) 单侧支撑上浮补位：左上/右上仅一侧有泡泡 → 轻泡飘进上方的空格
+    const floating=findFloating();
+    const floatSet=new Set(floating.map(([r,c])=>key(r,c)));
+    // 锚定邻居：目标空位必须紧邻至少一个"不悬空"的泡泡，否则是半空孤位，不能停；
+    // 顶行空格例外：天花板天然支撑，永远可补。
+    const anchoredNb=(r,c)=>{
+      if(r===0) return true;
+      return neighbors(r,c).some(([nr,nc])=>{
+        const nb=getCell(nr,nc);
+        return nb!==undefined && !floatSet.has(key(nr,nc));
+      });
+    };
+    // 移动辅助：先作废该泡泡的旧补位动画（防跨发射叠影），再登记新动画并搬格子
+    const moveCell=(r,c,target,cell)=>{
+      state.floaters=state.floaters.filter(f=>f.cell!==cell);
+      state.floaters.push({fx:cellX(r,c), fy:cellY(r), tx:cellX(target[0],target[1]), ty:cellY(target[0]), cell, t:0, fromK:key(r,c), toK:key(target[0],target[1])});
+      delCell(r,c); setCellRaw(target[0],target[1],cell);
+      movedCells.add(cell); moved=true;
+    };
+    // (a) 单侧支撑上浮补位：左上/右上仅一侧有泡泡 → 轻泡飘进上方的空格（目标必须锚定邻接）
     const keys=Object.keys(state.cells).sort((a,b)=>{
       const [ra,ca]=parseKey(a), [rb,cb]=parseKey(b);
       return ra-rb || ca-cb;                 // 自上而下扫描，高处的先卡稳
@@ -557,6 +576,7 @@ function physicsSettle(){
       if(r<1) continue;                        // 顶行没有上侧
       const cell=getCell(r,c);
       if(!cell || cell.t==='S' || cell.t==='B') continue;   // 重物不上浮补位
+      if(movedCells.has(cell)) continue;       // 本次已动过，不再飘
       const ur=r-1;
       const slots = r%2===0 ? [[ur,c-1],[ur,c]] : [[ur,c],[ur,c+1]];
       const inb = slots.filter(([,cc])=> cc>=0 && cc<colsInRow(ur));
@@ -564,27 +584,20 @@ function physicsSettle(){
       const occ = inb.filter(([rr,cc])=> getCell(rr,cc)!==undefined);
       if(occ.length!==1) continue;             // 仅"恰有一侧支撑"才触发
       const empty = inb.find(([rr,cc])=> getCell(rr,cc)===undefined);
-      state.floaters.push({fx:cellX(r,c), fy:cellY(r), tx:cellX(empty[0],empty[1]), ty:cellY(empty[0]), cell, t:0, fromK:key(r,c), toK:key(empty[0],empty[1])});
-      delCell(r,c); setCellRaw(empty[0],empty[1],cell);
-      moved=true;
+      if(!anchoredNb(empty[0],empty[1])) continue;   // 目标必须是锚定邻接（禁止飘进半空孤位）
+      moveCell(r,c,empty,cell);
     }
-    // (b) 完全悬空的轻泡向上找空格补位（原逻辑）
-    const floating=findFloating();
+    // (b) 完全悬空的轻泡向上找空格补位（只搜上方 3 行内，禁止长途穿越整面墙）
     for(const [r,c] of floating){
       const cell=getCell(r,c);
-      if(!cell) continue;
-      if(cell.t==='S' || cell.t==='B') continue;      // 重物不补位
-      for(let ur=r-1; ur>=0; ur--){
+      if(!cell || cell.t==='S' || cell.t==='B') continue;      // 重物不补位
+      if(movedCells.has(cell)) continue;
+      for(let ur=r-1; ur>=0 && ur>=r-3; ur--){
         let cand=null;
         for(const cc of [c-1,c,c+1]){
-          if(cc>=0 && cc<colsInRow(ur) && getCell(ur,cc)===undefined){ cand=[ur,cc]; break; }
+          if(cc>=0 && cc<colsInRow(ur) && getCell(ur,cc)===undefined && anchoredNb(ur,cc)){ cand=[ur,cc]; break; }
         }
-        if(cand){
-          state.floaters.push({fx:cellX(r,c), fy:cellY(r), tx:cellX(cand[0],cand[1]), ty:cellY(cand[0]), cell, t:0, fromK:key(r,c), toK:key(cand[0],cand[1])});
-          delCell(r,c); setCellRaw(cand[0],cand[1],cell);
-          moved=true;
-          break;
-        }
+        if(cand){ moveCell(r,c,cand,cell); break; }
       }
     }
   }
@@ -721,7 +734,7 @@ function afterSpecialHit(){ settleLanding(0); }
 function stepFlying(dt){
   const f=state.flying; if(!f) return;
   f.x+=f.vx*dt; f.y+=f.vy*dt;
-  f.vy+=(f.color==='B'?600:BUOY)*dt;    // 炸弹：600 向下加速（主人调的炮弹抛物线下砸）；其他泡泡照旧浮力上飘
+  f.vy+=(f.color==='B'?1000:BUOY)*dt;    // 炸弹：600 向下加速（主人调的炮弹抛物线下砸）；其他泡泡照旧浮力上飘
   // 飞行拖尾：每帧留 2 个渐隐粒子（物理轨迹可视化）
   if(!state.reduceMotion){
     for(let i=0;i<2;i++){
@@ -1494,6 +1507,7 @@ function drawGame(){
   });
   // 补位动画：轻泡挣脱后沿弧线上飘到新格子（0.9s，慢速优雅浮力）
   state.floaters=state.floaters.filter(fl=>{
+    if(state.cells[fl.toK]!==fl.cell) return false;   // 泡泡已不在目标格（被消除/二次移动）→ 动画作废，防鬼影
     fl.t+=1/60;
     const D=.9;
     const q=Math.min(1,fl.t/D);
